@@ -1,0 +1,41 @@
+## Scripts Layout
+
+The scripts folder contains diagnostics and calibration helpers.
+
+### Preferred Entry Points
+
+**Hardware Diagnostics:**
+- `python scripts/hardware.py discover` - LabJack discovery and basic read checks
+- `python scripts/hardware.py switch` - Pressure switch NO/NC/COM test
+- `python scripts/hardware.py switch-sweep` - Pressure switch sweep test
+- `python scripts/hardware.py solenoids` - Solenoid toggle test
+- `python scripts/hardware.py alicat-dual` - Dual Alicat test on shared COM
+
+**Test Suites:**
+- `python scripts/suite.py` - Multi-step pressure validation suites (static, resolution, ramps, filtering, plotting)
+- `python scripts/calibrate.py` - Calibration workflow (collect correlation data and/or analyze CSVs)
+
+**Specialized Diagnostics:**
+- `python scripts/edge_replay.py <csv>` - Deterministic edge-detector replay diagnostics
+
+### Active Test & Analysis Scripts
+
+- `analyze_correlation.py` - Analyze correlation data
+- `comprehensive_correlation_test.py` - Comprehensive correlation test
+- `plot_test_results.py` - Plot test results
+- `quick_static_test.py` - Quick static pressure test
+- `ramp_test.py` - Pressure ramp test
+- `torr_resolution_test.py` - Torr resolution test
+- `vacuum_correlation_test.py` - Vacuum correlation test
+- `pressure_alignment_scan.py` - Pressure alignment scan
+
+### Specialized Utilities
+
+- `dio_switch_diagnostic.py` - Specialized DIO switch diagnostic (bypasses application layer)
+- `hardware_test.py` - General hardware test (LabJack, Alicat)
+- `db_ptp_smoke_test.py` - Database/PTP smoke test helper
+- `verify_switch_config.py` - Verify switch configuration
+
+### Archived Scripts
+
+Deprecated scripts and one-off utilities have been moved to `scripts/archive/`. See `scripts/archive/README.md` for details on what was archived and their replacements.

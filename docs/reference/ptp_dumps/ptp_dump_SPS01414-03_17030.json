@@ -1,0 +1,346 @@
+{
+  "parts": [
+    "SPS01414-03",
+    "17030"
+  ],
+  "sequences": [
+    {
+      "PartID": "SPS01414-03                   ",
+      "SequenceID": "300 ",
+      "ParameterCount": 25
+    },
+    {
+      "PartID": "SPS01414-03                   ",
+      "SequenceID": "600 ",
+      "ParameterCount": 25
+    },
+    {
+      "PartID": "SPS01414-03                   ",
+      "SequenceID": "625 ",
+      "ParameterCount": 6
+    },
+    {
+      "PartID": "SPS01414-03                   ",
+      "SequenceID": "650 ",
+      "ParameterCount": 21
+    }
+  ],
+  "parameters": {
+    "SPS01414-03::300": [
+      {
+        "ParameterName": "ActivationLowerControlLimit",
+        "ParameterValue": "9.5"
+      },
+      {
+        "ParameterName": "ActivationTarget",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "ActivationUpperControlLimit",
+        "ParameterValue": "10.5"
+      },
+      {
+        "ParameterName": "CommonTerminal",
+        "ParameterValue": "4.000000"
+      },
+      {
+        "ParameterName": "ControlPressure1",
+        "ParameterValue": "0.000000"
+      },
+      {
+        "ParameterName": "ControlPressure2",
+        "ParameterValue": "7.000000"
+      },
+      {
+        "ParameterName": "ControlPressure3",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "ControlPressure4",
+        "ParameterValue": "11.000000"
+      },
+      {
+        "ParameterName": "ControlPressure5",
+        "ParameterValue": "14.700000"
+      },
+      {
+        "ParameterName": "DecreasingLowerLimit",
+        "ParameterValue": "7.500000"
+      },
+      {
+        "ParameterName": "DecreasingUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "IncreasingLowerLimit",
+        "ParameterValue": "9.500000"
+      },
+      {
+        "ParameterName": "IncreasingUpperLimit",
+        "ParameterValue": "10.500000"
+      },
+      {
+        "ParameterName": "NormallyClosedTerminal",
+        "ParameterValue": "3"
+      },
+      {
+        "ParameterName": "NormallyOpenTerminal",
+        "ParameterValue": "1"
+      },
+      {
+        "ParameterName": "PressureReference",
+        "ParameterValue": "Gauge"
+      },
+      {
+        "ParameterName": "RateTarget1",
+        "ParameterValue": "1.000000"
+      },
+      {
+        "ParameterName": "RateTarget2",
+        "ParameterValue": "2.000000"
+      },
+      {
+        "ParameterName": "RateTarget3",
+        "ParameterValue": "6.000000"
+      },
+      {
+        "ParameterName": "ResetBandLowerLimit",
+        "ParameterValue": "-Inf"
+      },
+      {
+        "ParameterName": "ResetBandUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "SnapTravelLowerControlLimit",
+        "ParameterValue": "0.006"
+      },
+      {
+        "ParameterName": "SnapTravelUpperControlLimit",
+        "ParameterValue": "0.010"
+      },
+      {
+        "ParameterName": "TargetActivationDirection",
+        "ParameterValue": "Increasing"
+      },
+      {
+        "ParameterName": "UnitsOfMeasure",
+        "ParameterValue": "1"
+      }
+    ],
+    "SPS01414-03::600": [
+      {
+        "ParameterName": "ActivationLowerControlLimit",
+        "ParameterValue": "9.5"
+      },
+      {
+        "ParameterName": "ActivationTarget",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "ActivationUpperControlLimit",
+        "ParameterValue": "10.5"
+      },
+      {
+        "ParameterName": "CommonTerminal",
+        "ParameterValue": "4.000000"
+      },
+      {
+        "ParameterName": "ControlPressure1",
+        "ParameterValue": "0.000000"
+      },
+      {
+        "ParameterName": "ControlPressure2",
+        "ParameterValue": "7.000000"
+      },
+      {
+        "ParameterName": "ControlPressure3",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "ControlPressure4",
+        "ParameterValue": "11.000000"
+      },
+      {
+        "ParameterName": "ControlPressure5",
+        "ParameterValue": "14.700000"
+      },
+      {
+        "ParameterName": "DecreasingLowerLimit",
+        "ParameterValue": "7.500000"
+      },
+      {
+        "ParameterName": "DecreasingUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "IncreasingLowerLimit",
+        "ParameterValue": "9.500000"
+      },
+      {
+        "ParameterName": "IncreasingUpperLimit",
+        "ParameterValue": "10.500000"
+      },
+      {
+        "ParameterName": "NormallyClosedTerminal",
+        "ParameterValue": "3"
+      },
+      {
+        "ParameterName": "NormallyOpenTerminal",
+        "ParameterValue": "1"
+      },
+      {
+        "ParameterName": "PressureReference",
+        "ParameterValue": "Gauge"
+      },
+      {
+        "ParameterName": "RateTarget1",
+        "ParameterValue": "1.000000"
+      },
+      {
+        "ParameterName": "RateTarget2",
+        "ParameterValue": "2.000000"
+      },
+      {
+        "ParameterName": "RateTarget3",
+        "ParameterValue": "6.000000"
+      },
+      {
+        "ParameterName": "ResetBandLowerLimit",
+        "ParameterValue": "-Inf"
+      },
+      {
+        "ParameterName": "ResetBandUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "SnapTravelLowerControlLimit",
+        "ParameterValue": "0.006"
+      },
+      {
+        "ParameterName": "SnapTravelUpperControlLimit",
+        "ParameterValue": "0.010"
+      },
+      {
+        "ParameterName": "TargetActivationDirection",
+        "ParameterValue": "Increasing"
+      },
+      {
+        "ParameterName": "UnitsOfMeasure",
+        "ParameterValue": "1"
+      }
+    ],
+    "SPS01414-03::625": [
+      {
+        "ParameterName": "TargetCycles",
+        "ParameterValue": "100"
+      },
+      {
+        "ParameterName": "TargetPressure",
+        "ParameterValue": "70.000000"
+      },
+      {
+        "ParameterName": "TargetRate",
+        "ParameterValue": "100.000000"
+      },
+      {
+        "ParameterName": "TimePressure",
+        "ParameterValue": "0.000000"
+      },
+      {
+        "ParameterName": "TimeVent",
+        "ParameterValue": "0.000000"
+      },
+      {
+        "ParameterName": "UnitsOfMeasure",
+        "ParameterValue": "PSI"
+      }
+    ],
+    "SPS01414-03::650": [
+      {
+        "ParameterName": "ActivationTarget",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "CommonTerminal",
+        "ParameterValue": "4.000000"
+      },
+      {
+        "ParameterName": "ControlPressure1",
+        "ParameterValue": "0.000000"
+      },
+      {
+        "ParameterName": "ControlPressure2",
+        "ParameterValue": "7.000000"
+      },
+      {
+        "ParameterName": "ControlPressure3",
+        "ParameterValue": "10.000000"
+      },
+      {
+        "ParameterName": "ControlPressure4",
+        "ParameterValue": "11.000000"
+      },
+      {
+        "ParameterName": "ControlPressure5",
+        "ParameterValue": "14.700000"
+      },
+      {
+        "ParameterName": "DecreasingLowerLimit",
+        "ParameterValue": "7.500000"
+      },
+      {
+        "ParameterName": "DecreasingUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "IncreasingLowerLimit",
+        "ParameterValue": "9.500000"
+      },
+      {
+        "ParameterName": "IncreasingUpperLimit",
+        "ParameterValue": "10.500000"
+      },
+      {
+        "ParameterName": "NormallyClosedTerminal",
+        "ParameterValue": "3.000000"
+      },
+      {
+        "ParameterName": "NormallyOpenTerminal",
+        "ParameterValue": "1.000000"
+      },
+      {
+        "ParameterName": "PressureReference",
+        "ParameterValue": "Gauge"
+      },
+      {
+        "ParameterName": "RateTarget1",
+        "ParameterValue": "1.000000"
+      },
+      {
+        "ParameterName": "RateTarget2",
+        "ParameterValue": "2.000000"
+      },
+      {
+        "ParameterName": "RateTarget3",
+        "ParameterValue": "6.000000"
+      },
+      {
+        "ParameterName": "ResetBandLowerLimit",
+        "ParameterValue": "-Inf"
+      },
+      {
+        "ParameterName": "ResetBandUpperLimit",
+        "ParameterValue": "Inf"
+      },
+      {
+        "ParameterName": "TargetActivationDirection",
+        "ParameterValue": "Increasing"
+      },
+      {
+        "ParameterName": "UnitsOfMeasure",
+        "ParameterValue": "1"
+      }
+    ]
+  }
+}

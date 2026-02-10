@@ -1,0 +1,53 @@
+# Stinger (Scorpion Calibration Stand)
+
+Stinger is a **dual-port pressure/vacuum switch test stand** used in a **cleanroom** with **high purity N₂** to test the Scorpion product line.
+
+Each port runs independently with its own control + measurement hardware, and operator workflows are driven by **Shop Order context** and **database test parameters**.
+
+## Quick Start
+
+1. Review documentation in `docs/README.md`
+2. Configure hardware channels in `stinger_config.yaml`
+3. Confirm open questions in `docs/OPEN_QUESTIONS.md`
+
+## Documentation
+
+All specs live in `docs/`:
+
+| Document | Purpose |
+|----------|---------|
+| `docs/README.md` | Documentation index |
+| `docs/SYSTEM_SPEC.md` | Authoritative system description |
+| `docs/WORKFLOWS.md` | QAL 15/16/17 operator workflows |
+| `docs/UI_SPEC.md` | Touch-first UI design |
+| `docs/HARDWARE_SPEC.md` | Hardware topology + channels |
+| `docs/DATABASE_CONTRACT.md` | DB read/write contract |
+| `docs/STATE_MACHINE.md` | Per-port state machine |
+| `docs/TESTING.md` | Unit, coverage, and hardware test commands |
+| `docs/COVERAGE_BASELINE.md` | Latest coverage snapshot and priorities |
+| `docs/OPEN_QUESTIONS.md` | Remaining unknowns |
+
+## Configuration
+
+`stinger_config.yaml` contains all hardware, timing, and database configuration.
+
+## Hardware Summary
+
+| Component | Port A (Left) | Port B (Right) |
+|-----------|---------------|----------------|
+| DAQ | LeftDAQ | RightDAQ |
+| Alicat | COM3 / Address B | COM3 / Address A |
+| Transducer | 0.5-4.5V = 0-115 PSI | Same |
+
+## Database
+
+Stinger integrates with the existing SQL Server schema:
+
+- **Reads**:
+  - `OrderCalibrationMaster` (work order context)
+  - `ProductTestParameters` (test parameters per PartID/SequenceID)
+- **Writes**:
+  - `OrderCalibrationDetail` (per-unit results; retest inserts new `ActivationID`)
+
+See `docs/DATABASE_CONTRACT.md` for full contract.
+

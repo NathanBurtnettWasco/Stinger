@@ -1,0 +1,327 @@
+"""Unit tests for Port and PortManager using fake hardware."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+
+import app.hardware.port as port_module
+from app.hardware.alicat import AlicatReading
+from app.hardware.labjack import SwitchState, TransducerReading
+from app.hardware.port import Port, PortId, PortManager, PortReading
+
+
+@dataclass
+class _FakeLabJackController:
+    config: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self.pressure_reference = str(self.config.get('transducer_reference', 'absolute')).lower()
+        self.switch_com_state = int(self.config.get('switch_com_state', 1))
+        self.solenoid_calls: list[bool] = []
+        self.configure_di_calls: list[tuple[int, int, int | None, int | None]] = []
+        self.next_pressure = 0.0
+        self.next_switch_activated = False
+        self.reset_filter_calls = 0
+
+    def configure(self) -> bool:
+        return True
+
+    def configure_di_pins(
+        self, no_pin: int, nc_pin: int, com_pin: int | None = None, com_state: int | None = None
+    ) -> None:
+        self.configure_di_calls.append((no_pin, nc_pin, com_pin, com_state))
+
+    def set_pressure_reference(self, reference: str) -> None:
+        self.pressure_reference = reference.lower()
+
+    def read_transducer(self) -> TransducerReading:
+        return TransducerReading(
+            voltage=2.5,
+            pressure=self.next_pressure,
+            pressure_raw=self.next_pressure,
+            pressure_reference=self.pressure_reference,
+            timestamp=1.0,
+        )
+
+    def read_switch_state(self) -> SwitchState:
+        return SwitchState(
+            no_active=self.next_switch_activated,
+            nc_active=not self.next_switch_activated,
+            timestamp=1.0,
+        )
+
+    def read_dio_values(self, max_dio: int = 22) -> dict[int, int]:
+        return {i: 0 for i in range(max_dio + 1)}
+
+    def set_solenoid(self, to_vacuum: bool) -> bool:
+        self.solenoid_calls.append(to_vacuum)
+        return True
+
+    def set_solenoid_safe(self) -> bool:
+        self.solenoid_calls.append(False)
+        return True
+
+    def reset_filter(self) -> None:
+        self.reset_filter_calls += 1
+
+    def cleanup(self) -> None:
+        return None
+
+    def get_status(self) -> dict[str, Any]:
+        return {'configured': True}
+
+
+class _FakeAlicatController:
+    def __init__(self, _config: dict[str, Any]) -> None:
+        self.connected = False
+        self.next_reading = AlicatReading(
+            pressure=14.7,
+            setpoint=14.7,
+            timestamp=1.0,
+            gauge_pressure=0.0,
+            barometric_pressure=14.7,
+        )
+        self.hold_calls = 0
+        self.disconnect_calls = 0
+
+    def connect(self) -> bool:
+        self.connected = True
+        return True
+
+    def read_status(self) -> AlicatReading:
+        return self.next_reading
+
+    def set_pressure(self, _setpoint: float) -> bool:
+        return True
+
+    def set_ramp_rate(self, _rate: float) -> bool:
+        return True
+
+    def exhaust(self) -> bool:
+        return True
+
+    def hold_valve(self) -> bool:
+        self.hold_calls += 1
+        return True
+
+    def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
+    def get_status(self) -> dict[str, Any]:
+        return {'connected': self.connected}
+
+
+def _make_port(monkeypatch: Any, *, solenoid_cfg: dict[str, Any] | None = None) -> Port:
+    monkeypatch.setattr(port_module, 'LabJackController', _FakeLabJackController)
+    monkeypatch.setattr(port_module, 'AlicatController', _FakeAlicatController)
+    return Port(
+        port_id=PortId.PORT_A,
+        labjack_config={
+            'switch_no_dio': 1,
+            'switch_nc_dio': 2,
+            'switch_com_dio': 3,
+            'switch_com_state': 0,
+            'use_ptp_terminals': True,
+        },
+        alicat_config={'address': 'A'},
+        solenoid_config=solenoid_cfg or {},
+    )
+
+
+def test_configure_from_ptp_maps_terminal_pins(monkeypatch: Any) -> None:
+    port = _make_port(monkeypatch)
+    ok = port.configure_from_ptp(
+        {
+            'NormallyOpenTerminal': '3',
+            'NormallyClosedTerminal': '1',
+            'CommonTerminal': '2',
+            'PressureReference': 'Gauge',
+        }
+    )
+    assert ok
+    daq = port.daq
+    assert isinstance(daq, _FakeLabJackController)
+    assert daq.configure_di_calls
+    no_pin, nc_pin, com_pin, com_state = daq.configure_di_calls[-1]
+    assert (no_pin, nc_pin, com_pin, com_state) == (2, 0, 1, 0)
+    assert daq.pressure_reference == 'gauge'
+
+
+def test_set_solenoid_refuses_unsafe_vacuum(monkeypatch: Any) -> None:
+    port = _make_port(monkeypatch, solenoid_cfg={'safe_vacuum_switch_threshold_psi': 2.0})
+    daq = port.daq
+    assert isinstance(daq, _FakeLabJackController)
+    daq.pressure_reference = 'gauge'
+    daq.next_pressure = 10.0
+
+    assert not port.set_solenoid(True)
+    assert daq.solenoid_calls == []
+
+
+def test_set_solenoid_allows_safe_vacuum_and_resets_filter(monkeypatch: Any) -> None:
+    port = _make_port(monkeypatch, solenoid_cfg={'safe_vacuum_switch_threshold_psi': 2.0})
+    daq = port.daq
+    assert isinstance(daq, _FakeLabJackController)
+    daq.pressure_reference = 'absolute'
+    daq.next_pressure = 15.0
+
+    assert port.set_solenoid(True)
+    assert daq.solenoid_calls == [True]
+    assert daq.reset_filter_calls == 1
+
+
+def test_read_fast_uses_cached_alicat_and_gauge_conversion(monkeypatch: Any) -> None:
+    port = _make_port(monkeypatch)
+    daq = port.daq
+    assert isinstance(daq, _FakeLabJackController)
+    daq.pressure_reference = 'gauge'
+    daq.next_pressure = 16.0
+    port._cached_alicat = AlicatReading(
+        pressure=16.0,
+        setpoint=16.0,
+        timestamp=1.0,
+        gauge_pressure=1.3,
+        barometric_pressure=14.7,
+    )
+
+    reading = port.read_fast()
+    assert reading.alicat is not None
+    assert reading.transducer is not None
+    assert reading.transducer.pressure == pytest.approx(1.3)
+    assert reading.transducer.pressure_reference == 'gauge'
+
+
+def test_edge_callback_invoked_on_switch_transition(monkeypatch: Any) -> None:
+    port = _make_port(monkeypatch)
+    daq = port.daq
+    assert isinstance(daq, _FakeLabJackController)
+    seen: list[bool] = []
+    port.register_edge_callback(lambda edge: seen.append(edge.activated))
+
+    daq.next_switch_activated = False
+    _ = port.read_fast()
+    daq.next_switch_activated = True
+    _ = port.read_fast()
+
+    assert seen == [True]
+
+
+class _FakeManagedPort:
+    def __init__(
+        self,
+        port_id: PortId,
+        labjack_config: dict[str, Any],
+        alicat_config: dict[str, Any],
+        solenoid_config: dict[str, Any] | None = None,
+    ) -> None:
+        self.port_id = port_id
+        self.labjack_config = dict(labjack_config)
+        self.alicat_config = dict(alicat_config)
+        self.solenoid_config = dict(solenoid_config or {})
+        self.connect_result = True
+        self.connect_calls = 0
+        self.refresh_calls = 0
+        self.read_fast_calls = 0
+        self.read_all_calls = 0
+        self.disconnect_calls = 0
+
+    def connect(self) -> bool:
+        self.connect_calls += 1
+        return self.connect_result
+
+    def read_all(self) -> PortReading:
+        self.read_all_calls += 1
+        return PortReading(timestamp=float(self.read_all_calls))
+
+    def refresh_alicat(self) -> None:
+        self.refresh_calls += 1
+
+    def read_fast(self) -> PortReading:
+        self.read_fast_calls += 1
+        return PortReading(timestamp=float(self.read_fast_calls))
+
+    def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
+    def get_status(self) -> dict[str, Any]:
+        return {'ok': True}
+
+
+def _manager_config() -> dict[str, Any]:
+    return {
+        'timing': {'hardware_poll_interval_ms': 0, 'alicat_poll_divisor': 5},
+        'hardware': {
+            'solenoid': {'safe_vacuum_switch_threshold_psi': 2.5},
+            'labjack': {
+                'device_type': 'T7',
+                'port_a': {'switch_no_dio': 1},
+                'port_b': {'switch_no_dio': 9},
+            },
+            'alicat': {
+                'port_a': {'address': 'A'},
+                'port_b': {'address': 'B'},
+                'serial_port': 'COM5',
+            },
+        },
+    }
+
+
+def test_port_manager_initializes_connects_and_reads(monkeypatch: Any) -> None:
+    monkeypatch.setattr(port_module, 'Port', _FakeManagedPort)
+    manager = PortManager(_manager_config())
+    assert manager.initialize_ports()
+    assert set(manager.ports.keys()) == {PortId.PORT_A, PortId.PORT_B}
+
+    assert manager.connect_all()
+    readings = manager.read_all_ports()
+    assert set(readings.keys()) == {PortId.PORT_A, PortId.PORT_B}
+    assert manager.get_port('port_a') is not None
+    assert manager.get_port('invalid') is None
+
+
+def test_port_manager_connect_all_reports_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(port_module, 'Port', _FakeManagedPort)
+    manager = PortManager(_manager_config())
+    manager.initialize_ports()
+    port_b = manager.get_port(PortId.PORT_B)
+    assert isinstance(port_b, _FakeManagedPort)
+    port_b.connect_result = False
+    assert not manager.connect_all()
+
+
+def test_port_manager_poll_loop_refreshes_cached_alicat(monkeypatch: Any) -> None:
+    monkeypatch.setattr(port_module, 'Port', _FakeManagedPort)
+    manager = PortManager(_manager_config())
+    manager.initialize_ports()
+
+    callback_count = {'value': 0}
+
+    def on_poll(_readings: dict[PortId, PortReading]) -> None:
+        callback_count['value'] += 1
+        manager._polling = False
+
+    manager.set_poll_callback(on_poll)
+    manager._polling = True
+    manager._poll_loop()
+
+    assert callback_count['value'] == 1
+    for port in manager.ports.values():
+        assert isinstance(port, _FakeManagedPort)
+        # One refresh while seeding, one at cycle 0.
+        assert port.refresh_calls == 2
+        assert port.read_fast_calls == 1
+
+
+def test_port_manager_disconnect_all_clears_ports(monkeypatch: Any) -> None:
+    monkeypatch.setattr(port_module, 'Port', _FakeManagedPort)
+    manager = PortManager(_manager_config())
+    manager.initialize_ports()
+    ports = list(manager.ports.values())
+    manager.disconnect_all()
+    assert manager.ports == {}
+    for port in ports:
+        assert isinstance(port, _FakeManagedPort)
+        assert port.disconnect_calls == 1
