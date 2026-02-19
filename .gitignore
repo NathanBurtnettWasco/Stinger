@@ -27,6 +27,7 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+!Stinger.spec
 
 # Virtual environments
 .venv/

@@ -510,8 +510,9 @@ class AlicatController:
                         if timeout_exc is not None and isinstance(e, timeout_exc):
                             is_write_timeout = True
                     if attempt < self._command_retries:
+                        retry_log = logger.debug if attempt == 0 else logger.warning
                         if is_write_timeout:
-                            logger.warning(
+                            retry_log(
                                 'Alicat %s: Write timeout for "%s", retry %d/%d',
                                 self.address,
                                 command,
@@ -519,7 +520,7 @@ class AlicatController:
                                 self._command_retries,
                             )
                         else:
-                            logger.warning(
+                            retry_log(
                                 'Alicat %s: Command "%s" error (%s), retry %d/%d',
                                 self.address,
                                 command,
@@ -538,7 +539,8 @@ class AlicatController:
                     return None
 
                 if attempt < self._command_retries:
-                    logger.warning(
+                    retry_log = logger.debug if attempt == 0 else logger.warning
+                    retry_log(
                         'Alicat %s: Empty/invalid response for "%s", retry %d/%d',
                         self.address,
                         command,

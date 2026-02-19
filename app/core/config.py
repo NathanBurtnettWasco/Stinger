@@ -5,18 +5,32 @@ Loads and validates the stinger_config.yaml file.
 """
 
 import logging
-from datetime import datetime
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
 
+from app.core.logging_config import setup_logging as _setup_logging
 from app.services.control_config import ControlConfigError, parse_control_config
+from app.services.noise_estimator import (
+    DEFAULT_MAX_HOLDOFF_MS,
+    DEFAULT_MIN_SAMPLES,
+    DEFAULT_TRANSITION_SIGMA_FACTOR,
+    DEFAULT_TREND_ALPHA,
+    DEFAULT_WINDOW_SAMPLES,
+)
 
 logger = logging.getLogger(__name__)
 
-# Default config file location (relative to project root)
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "stinger_config.yaml"
+def get_default_config_path() -> Path:
+    """Resolve default config path for source and frozen executable runs."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent / 'stinger_config.yaml'
+    return Path(__file__).resolve().parent.parent.parent / 'stinger_config.yaml'
+
+
+DEFAULT_CONFIG_PATH = get_default_config_path()
 MEASUREMENT_SOURCE_TRANSDUCER = 'transducer'
 MEASUREMENT_SOURCE_ALICAT = 'alicat'
 VALID_MEASUREMENT_SOURCES = {
@@ -27,14 +41,14 @@ VALID_MEASUREMENT_SOURCES = {
 
 def normalize_measurement_source(value: Any) -> str:
     """Normalize configured pressure source value to a supported token."""
-    normalized = str(value or MEASUREMENT_SOURCE_TRANSDUCER).strip().lower()
+    normalized = str(value or MEASUREMENT_SOURCE_ALICAT).strip().lower()
     if normalized not in VALID_MEASUREMENT_SOURCES:
         logger.warning(
             'Invalid hardware.measurement.preferred_source=%r; defaulting to %s',
             value,
-            MEASUREMENT_SOURCE_TRANSDUCER,
+            MEASUREMENT_SOURCE_ALICAT,
         )
-        return MEASUREMENT_SOURCE_TRANSDUCER
+        return MEASUREMENT_SOURCE_ALICAT
     return normalized
 
 
@@ -49,11 +63,62 @@ def apply_measurement_defaults(config: Dict[str, Any]) -> None:
         raise ValueError('Config section "hardware.measurement" must be a mapping')
 
     measurement_cfg['preferred_source'] = normalize_measurement_source(
-        measurement_cfg.get('preferred_source', MEASUREMENT_SOURCE_TRANSDUCER)
+        measurement_cfg.get('preferred_source', MEASUREMENT_SOURCE_ALICAT)
     )
     measurement_cfg['fallback_on_unavailable'] = bool(
-        measurement_cfg.get('fallback_on_unavailable', True)
+        measurement_cfg.get('fallback_on_unavailable', False)
     )
+
+
+def apply_debug_noise_defaults(config: Dict[str, Any]) -> None:
+    """Ensure debug noise settings exist and are normalized."""
+    ui_cfg = config.setdefault('ui', {})
+    if not isinstance(ui_cfg, dict):
+        raise ValueError('Config section "ui" must be a mapping')
+
+    debug_noise_cfg = ui_cfg.setdefault('debug_noise', {})
+    if not isinstance(debug_noise_cfg, dict):
+        raise ValueError('Config section "ui.debug_noise" must be a mapping')
+
+    window_samples = debug_noise_cfg.get('window_samples', DEFAULT_WINDOW_SAMPLES)
+    try:
+        window_samples = max(10, int(window_samples))
+    except (TypeError, ValueError):
+        window_samples = DEFAULT_WINDOW_SAMPLES
+    debug_noise_cfg['window_samples'] = window_samples
+
+    min_samples = debug_noise_cfg.get('min_samples', DEFAULT_MIN_SAMPLES)
+    try:
+        min_samples = max(5, int(min_samples))
+    except (TypeError, ValueError):
+        min_samples = DEFAULT_MIN_SAMPLES
+    debug_noise_cfg['min_samples'] = min(min_samples, window_samples)
+
+    trend_alpha = debug_noise_cfg.get('trend_alpha', DEFAULT_TREND_ALPHA)
+    try:
+        trend_alpha = float(trend_alpha)
+    except (TypeError, ValueError):
+        trend_alpha = DEFAULT_TREND_ALPHA
+    if trend_alpha <= 0.0 or trend_alpha >= 1.0:
+        trend_alpha = DEFAULT_TREND_ALPHA
+    debug_noise_cfg['trend_alpha'] = trend_alpha
+
+    sigma_factor = debug_noise_cfg.get(
+        'transition_sigma_factor',
+        DEFAULT_TRANSITION_SIGMA_FACTOR,
+    )
+    try:
+        sigma_factor = float(sigma_factor)
+    except (TypeError, ValueError):
+        sigma_factor = DEFAULT_TRANSITION_SIGMA_FACTOR
+    debug_noise_cfg['transition_sigma_factor'] = max(1.0, sigma_factor)
+
+    max_holdoff_ms = debug_noise_cfg.get('max_holdoff_ms', DEFAULT_MAX_HOLDOFF_MS)
+    try:
+        max_holdoff_ms = int(max_holdoff_ms)
+    except (TypeError, ValueError):
+        max_holdoff_ms = DEFAULT_MAX_HOLDOFF_MS
+    debug_noise_cfg['max_holdoff_ms'] = max(0, max_holdoff_ms)
 
 
 def _validate_required_sections(config: Dict[str, Any]) -> None:
@@ -67,9 +132,20 @@ def _validate_required_sections(config: Dict[str, Any]) -> None:
         raise ValueError("Missing required hardware section: labjack")
 
 
+def _normalize_and_validate_config(config: Dict[str, Any]) -> None:
+    """Run shared normalization and validation for load/save paths."""
+    _validate_required_sections(config)
+    apply_measurement_defaults(config)
+    apply_debug_noise_defaults(config)
+    try:
+        parse_control_config(config)
+    except ControlConfigError as exc:
+        raise ValueError(f'Invalid control configuration: {exc}') from exc
+
+
 def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """Load configuration from YAML file."""
-    path = config_path or DEFAULT_CONFIG_PATH
+    path = config_path or get_default_config_path()
     
     if not path.exists():
         raise FileNotFoundError(f"Configuration file not found: {path}")
@@ -81,12 +157,7 @@ def load_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
 
     if not isinstance(config, dict):
         raise ValueError('Configuration root must be a mapping')
-    _validate_required_sections(config)
-    apply_measurement_defaults(config)
-    try:
-        parse_control_config(config)
-    except ControlConfigError as exc:
-        raise ValueError(f'Invalid control configuration: {exc}') from exc
+    _normalize_and_validate_config(config)
     
     logger.info(f"Configuration loaded: {config['app']['name']} v{config['app']['version']}")
     return config
@@ -96,14 +167,9 @@ def save_config(config: Dict[str, Any], config_path: Optional[Path] = None) -> P
     """Persist configuration to YAML file after normalization/validation."""
     if not isinstance(config, dict):
         raise ValueError('Configuration root must be a mapping')
-    _validate_required_sections(config)
-    apply_measurement_defaults(config)
-    try:
-        parse_control_config(config)
-    except ControlConfigError as exc:
-        raise ValueError(f'Invalid control configuration: {exc}') from exc
+    _normalize_and_validate_config(config)
 
-    path = config_path or DEFAULT_CONFIG_PATH
+    path = config_path or get_default_config_path()
     logger.info('Saving configuration to %s', path)
     with open(path, 'w', encoding='utf-8') as f:
         yaml.safe_dump(config, f, sort_keys=False)
@@ -132,71 +198,5 @@ def get_port_config(config: Dict[str, Any], port_id: str) -> Dict[str, Any]:
 
 
 def setup_logging(config: Dict[str, Any]) -> None:
-    """Configure logging with file and console handlers."""
-    import logging.handlers
-    
-    log_cfg = config.get('logging', {})
-    level = getattr(logging, log_cfg.get('level', 'DEBUG'))
-    log_dir = Path(log_cfg.get('log_dir', 'logs'))
-    if not log_dir.is_absolute():
-        project_root = DEFAULT_CONFIG_PATH.parent
-        log_dir = project_root / log_dir
-    max_bytes = log_cfg.get('max_bytes', 10_485_760)  # 10MB
-    backup_count = log_cfg.get('backup_count', 5)
-    
-    # Ensure log directory exists
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create formatters
-    brief_formatter = logging.Formatter('%(levelname)s: %(message)s')
-    detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(level)
-    console_handler.setFormatter(brief_formatter)
-    
-    # File handler
-    current_log_path = log_dir / 'stinger.log'
-    file_handler = logging.handlers.RotatingFileHandler(
-        current_log_path,
-        maxBytes=max_bytes,
-        backupCount=backup_count,
-        encoding='utf-8',
-    )
-    file_handler.setLevel(level)
-    file_handler.setFormatter(detailed_formatter)
-
-    session_log_name = f"stinger_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    session_log_path = log_dir / session_log_name
-    session_file_handler = logging.FileHandler(session_log_path, encoding='utf-8')
-    session_file_handler.setLevel(level)
-    session_file_handler.setFormatter(detailed_formatter)
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-
-    # Prevent duplicate handlers when setup is called repeatedly in-process.
-    for handler in list(root_logger.handlers):
-        root_logger.removeHandler(handler)
-        try:
-            handler.close()
-        except Exception:
-            pass
-
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(session_file_handler)
-    
-    # Module-specific levels
-    logging.getLogger('stinger.hardware').setLevel(logging.INFO)
-    logging.getLogger('stinger.ui').setLevel(logging.INFO)
-    logging.getLogger('stinger.database').setLevel(logging.INFO)
-    
-    logger.info("Logging configured")
-    logger.info("Log file: %s", current_log_path)
-    logger.info("Session log file: %s", session_log_path)
+    """Compatibility wrapper around dedicated logging config module."""
+    _setup_logging(config, project_root=get_default_config_path().parent)

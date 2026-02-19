@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import yaml
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from app.hardware.port import Port, PortManager
+from app.services.ptp_service import convert_pressure
 
 
 @dataclass
@@ -27,6 +32,7 @@ class Sample:
     setpoint_ref: Optional[str]
     route: Optional[str]
     transducer_abs_psi: Optional[float]
+    transducer_raw_abs_psi: Optional[float]
     alicat_abs_psi: Optional[float]
     alicat_setpoint_raw: Optional[float]
     alicat_pressure_raw: Optional[float]
@@ -58,6 +64,20 @@ def _infer_barometric_psi(reading: Any) -> Optional[float]:
     return None
 
 
+def _normalize_barometric_guess(raw_baro: Optional[float]) -> float:
+    """Normalize barometric pressure guess to a plausible PSI value."""
+    if raw_baro is None:
+        return 14.7
+    if 5.0 <= raw_baro <= 20.0:
+        return raw_baro
+    # Some devices occasionally report Torr-like values before units settle.
+    if raw_baro > 20.0:
+        torr_converted = convert_pressure(raw_baro, 'Torr', 'PSI')
+        if 5.0 <= torr_converted <= 20.0:
+            return torr_converted
+    return 14.7
+
+
 def _infer_alicat_abs_psi(reading: Any, fallback_baro: float) -> Optional[float]:
     if reading is None or reading.alicat is None:
         return None
@@ -72,6 +92,18 @@ def _infer_transducer_abs_psi(reading: Any, fallback_baro: float) -> Optional[fl
     if reading is None or reading.transducer is None:
         return None
     value = reading.transducer.pressure
+    reference = str(reading.transducer.pressure_reference or 'absolute').strip().lower()
+    if reference == 'gauge':
+        return value + fallback_baro
+    return value
+
+
+def _infer_transducer_raw_abs_psi(reading: Any, fallback_baro: float) -> Optional[float]:
+    if reading is None or reading.transducer is None:
+        return None
+    value = reading.transducer.pressure_raw
+    if value is None:
+        return None
     reference = str(reading.transducer.pressure_reference or 'absolute').strip().lower()
     if reference == 'gauge':
         return value + fallback_baro
@@ -132,6 +164,7 @@ def _sample(
     baro = _infer_barometric_psi(reading)
     baro_used = baro if baro is not None else fallback_baro
     trans_abs = _infer_transducer_abs_psi(reading, baro_used)
+    trans_raw_abs = _infer_transducer_raw_abs_psi(reading, baro_used)
     alicat_abs = _infer_alicat_abs_psi(reading, baro_used)
     error = None
     if trans_abs is not None and alicat_abs is not None:
@@ -147,6 +180,7 @@ def _sample(
         setpoint_ref=setpoint_ref,
         route=route,
         transducer_abs_psi=trans_abs,
+        transducer_raw_abs_psi=trans_raw_abs,
         alicat_abs_psi=alicat_abs,
         alicat_setpoint_raw=reading.alicat.setpoint if reading and reading.alicat else None,
         alicat_pressure_raw=reading.alicat.pressure if reading and reading.alicat else None,
@@ -359,6 +393,8 @@ def run_scan(
     settle_tolerance_psi: float = 0.6,
     settle_hold_s: float = 4.0,
     settle_timeout_s: float = 240.0,
+    force_setpoint_ref: Optional[str] = None,
+    capture_raw_profile: bool = False,
 ) -> Dict[str, Any]:
     config = _load_config(config_path)
     manager = PortManager(config)
@@ -395,10 +431,36 @@ def run_scan(
                 _log(f"Skipping {port_id}: port not available", progress_log_path)
                 continue
 
+            # Force PSI units for stable control/analysis across ports.
+            try:
+                port.alicat.configure_units_from_ptp('1')
+                time.sleep(0.15)
+            except Exception:
+                _log(f"{port_id}: warning - failed to force PSI units", progress_log_path)
+
+            if capture_raw_profile:
+                # Optional capture mode for offline model optimization:
+                # disable offset/model/filter in-memory for cleaner raw dataset.
+                port.daq.pressure_offset = 0.0
+                port.daq._error_model = None
+                port.daq._nonlinear_breakpoint_psi = 0.0
+                port.daq._nonlinear_low_slope = 0.0
+                port.daq._nonlinear_low_intercept = 0.0
+                port.daq._nonlinear_high_slope = 0.0
+                port.daq._nonlinear_high_intercept = 0.0
+                port.daq._filter_alpha = 0.0
+                port.daq._ema_pressure = None
+                _log(
+                    f'{port_id}: capture_raw_profile enabled (offset/model/filter disabled in-memory)',
+                    progress_log_path,
+                )
+
             initial = port.read_all()
             baro = _infer_barometric_psi(initial)
-            baro_guess = baro if baro is not None else 14.7
+            baro_guess = _normalize_barometric_guess(baro)
             setpoint_ref = _infer_setpoint_reference(port, baro_guess)
+            if force_setpoint_ref in {'absolute', 'gauge'}:
+                setpoint_ref = force_setpoint_ref
             _log(
                 f"{port_id}: initial baro={baro_guess:.3f}, inferred setpoint_ref={setpoint_ref}",
                 progress_log_path,
@@ -559,6 +621,12 @@ def main() -> None:
     parser.add_argument('--settle-hold-s', type=float, default=4.0)
     parser.add_argument('--settle-timeout-s', type=float, default=240.0)
     parser.add_argument('--settle-tolerance-psi', type=float, default=0.6)
+    parser.add_argument('--force-setpoint-ref', default='auto', choices=['auto', 'absolute', 'gauge'])
+    parser.add_argument(
+        '--capture-raw-profile',
+        action='store_true',
+        help='Disable in-memory offset/model/filter to capture cleaner calibration input data.',
+    )
     args = parser.parse_args()
 
     static_points = [float(x.strip()) for x in args.static_points.split(',') if x.strip()]
@@ -578,6 +646,8 @@ def main() -> None:
         settle_hold_s=args.settle_hold_s,
         settle_timeout_s=args.settle_timeout_s,
         settle_tolerance_psi=args.settle_tolerance_psi,
+        force_setpoint_ref=(None if args.force_setpoint_ref == 'auto' else args.force_setpoint_ref),
+        capture_raw_profile=args.capture_raw_profile,
     )
     print(json.dumps(summary, indent=2))
 

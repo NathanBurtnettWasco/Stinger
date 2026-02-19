@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import shutil
 import threading
 import time
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -17,7 +20,7 @@ from app.database.operations import (
     get_next_serial_number,
     save_test_result,
 )
-from app.database.session import get_engine
+from app.database.session import close_database, get_engine, initialize_database
 from app.services import run_async
 from app.core.config import save_config
 from app.services.ptp_service import (
@@ -34,18 +37,28 @@ from app.services.state.port_state_machine import PortStateMachine, PortState
 from app.services.sweep_utils import narrow_bounds, resolve_sweep_bounds, resolve_sweep_mode
 from app.services.test_executor import TestExecutor
 from app.services.test_protocol import TestEvent
+from app.services.admin_action_service import AdminActionService
+from app.services.debug_action_service import DebugActionService
+from app.services.port_runtime_state import PortRuntimeState
 from app.services.ui_bridge import UIBridge
 from app.hardware.port import Port, PortManager, PortId, PortReading
 from app.services.measurement_source import get_measurement_settings
+from app.services.pressure_domain import (
+    infer_barometric_pressure,
+    infer_setpoint_reference,
+    is_gauge_unit_label,
+    is_plausible_barometric_psi as _domain_is_plausible_barometric_psi,
+    resolve_display_reference,
+    to_absolute_pressure,
+    to_display_pressure,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _is_plausible_barometric_psi(value: Optional[float]) -> bool:
-    """Return True when a barometric PSI value looks physically plausible."""
-    if value is None or not math.isfinite(value):
-        return False
-    return 8.0 <= value <= 17.5
+    """Backward-compatible wrapper for pressure-domain plausibility check."""
+    return _domain_is_plausible_barometric_psi(value)
 
 class WorkOrderController(QObject):
     """Coordinates work order validation and PTP loading."""
@@ -74,28 +87,14 @@ class WorkOrderController(QObject):
         self._readings_buffer_lock = threading.Lock()
         self._latest_readings: Dict[str, PortReading] = {}
         self._latest_readings_lock = threading.Lock()
-        self._last_barometric_psi: Dict[str, float] = {
-            "port_a": 14.7,
-            "port_b": 14.7,
-        }
-        self._barometric_warning_issued: Dict[str, bool] = {
-            'port_a': False,
-            'port_b': False,
-        }
+        self._runtime_state = PortRuntimeState.with_defaults()
+        self._last_barometric_psi = self._runtime_state.last_barometric_psi
+        self._barometric_warning_issued = self._runtime_state.barometric_warning_issued
         self._debug_sweep_lock = threading.Lock()
         self._debug_sweeps_in_progress: set[str] = set()
-        self._debug_solenoid_mode: Dict[str, str] = {
-            "port_a": "atmosphere",
-            "port_b": "atmosphere",
-        }
-        self._debug_alicat_mode: Dict[str, str] = {
-            "port_a": "pressurize",
-            "port_b": "pressurize",
-        }
-        self._debug_solenoid_last_route: Dict[str, Optional[bool]] = {
-            "port_a": None,
-            "port_b": None,
-        }
+        self._debug_solenoid_mode = self._runtime_state.debug_solenoid_mode
+        self._debug_alicat_mode = self._runtime_state.debug_alicat_mode
+        self._debug_solenoid_last_route = self._runtime_state.debug_solenoid_last_route
         solenoid_cfg = self._config.get("hardware", {}).get("solenoid", {})
         self._auto_vacuum_threshold_psi = float(
             solenoid_cfg.get("safe_vacuum_switch_threshold_psi", 2.0)
@@ -122,23 +121,13 @@ class WorkOrderController(QObject):
         # State machines (one per port)
         self._state_machines: Dict[str, PortStateMachine] = {}
         self._test_executors: Dict[str, TestExecutor] = {}
-        self._cycle_estimates_abs_psi: Dict[str, Dict[str, Any]] = {
-            'port_a': {'activation': None, 'deactivation': None, 'count': 0},
-            'port_b': {'activation': None, 'deactivation': None, 'count': 0},
-        }
+        self._precision_owner_port: Optional[str] = None
+        self._precision_wait_queue: List[str] = []
+        self._cycle_estimates_abs_psi = self._runtime_state.cycle_estimates_abs_psi
         # Track current measured values for preserving during partial updates
-        self._current_measured_values: Dict[str, Dict[str, Optional[float]]] = {
-            'port_a': {'activation': None, 'deactivation': None},
-            'port_b': {'activation': None, 'deactivation': None},
-        }
-        self._switch_presence: Dict[str, bool] = {
-            'port_a': False,
-            'port_b': False,
-        }
-        self._manual_switch_latched: Dict[str, bool] = {
-            'port_a': False,
-            'port_b': False,
-        }
+        self._current_measured_values = self._runtime_state.current_measured_values
+        self._switch_presence = self._runtime_state.switch_presence
+        self._manual_switch_latched = self._runtime_state.manual_switch_latched
         for pid in ('port_a', 'port_b'):
             sm = PortStateMachine(pid)
             sm.state_changed.connect(self._on_sm_state_changed)
@@ -167,6 +156,29 @@ class WorkOrderController(QObject):
         self._ui_bridge.barometric_pressure_updated.connect(self._on_barometric_pressure_updated)
         self._ui_bridge.debug_action_requested.connect(self._handle_debug_action)
         self._ui_bridge.admin_action_requested.connect(self._handle_admin_action)
+
+        self._debug_actions = DebugActionService(
+            port_manager=self._port_manager,
+            get_pressure_unit=self._get_ui_pressure_unit,
+            set_debug_alicat_mode=self._set_debug_alicat_mode,
+            set_debug_solenoid_mode=self._set_debug_solenoid_mode,
+            convert_display_to_absolute_psi=self._convert_debug_display_to_abs_psi,
+            resolve_command_reference=self._resolve_alicat_command_reference,
+            on_find_setpoint=self._start_find_setpoint,
+            on_set_dio_direction=self._set_debug_dio_direction,
+            on_read_dio_all=self._read_debug_dio_all,
+        )
+        self._admin_actions = AdminActionService(
+            on_set_main_measurement_source=self._set_main_measurement_source,
+            on_refresh_hardware=self._refresh_hardware_status,
+            on_refresh_database=self._refresh_database_status,
+            on_reconnect_hardware=self._reconnect_hardware,
+            on_reconnect_database=self._reconnect_database,
+            on_open_logs=self._open_logs,
+            on_export_logs=self._export_logs,
+            on_export_history=self._export_history,
+            on_safety_override=self._safety_override,
+        )
 
         # Test-control signals (from UI buttons)
         self._ui_bridge.start_pressurize_requested.connect(self._on_start_pressurize)
@@ -317,11 +329,77 @@ class WorkOrderController(QObject):
         # Start polling loop
         poll_start = time.perf_counter()
         self._port_manager.start_polling()
+        self._port_manager.set_alicat_poll_profile(None)
         logger.info(
             'Hardware polling started in %.3fs (total hardware init %.3fs)',
             time.perf_counter() - poll_start,
             time.perf_counter() - init_start,
         )
+
+    def _request_precision_slot(self, port_id: str) -> bool:
+        """Try to acquire precision-sweep exclusivity for a port."""
+        if self._precision_owner_port == port_id:
+            return True
+        if self._precision_owner_port is None and not self._precision_wait_queue:
+            self._precision_owner_port = port_id
+            self._port_manager.set_alicat_poll_profile(port_id)
+            logger.info('%s: Precision slot granted immediately', port_id)
+            return True
+        if port_id not in self._precision_wait_queue:
+            self._precision_wait_queue.append(port_id)
+            logger.info(
+                '%s: Waiting for precision slot (owner=%s queue=%s)',
+                port_id,
+                self._precision_owner_port,
+                self._precision_wait_queue,
+            )
+            if self._ui_bridge:
+                self._ui_bridge.update_substate(port_id, 'cycling.waiting_precision_slot', {})
+        return False
+
+    def _remove_precision_waiter(self, port_id: str) -> None:
+        if port_id not in self._precision_wait_queue:
+            return
+        self._precision_wait_queue = [pid for pid in self._precision_wait_queue if pid != port_id]
+        logger.info('%s: Removed from precision wait queue', port_id)
+
+    def _release_precision_slot(self, port_id: str, reason: str) -> None:
+        """Release precision ownership for a port and restore normal polling."""
+        self._remove_precision_waiter(port_id)
+        if self._precision_owner_port != port_id:
+            return
+        self._precision_owner_port = None
+        self._port_manager.set_alicat_poll_profile(None)
+        logger.info('%s: Precision slot released (%s)', port_id, reason)
+        self._promote_waiting_precision_port()
+
+    def _promote_waiting_precision_port(self) -> None:
+        """Grant precision to next waiting port (first-ready-first-served)."""
+        if self._precision_owner_port is not None:
+            return
+        while self._precision_wait_queue:
+            next_port = self._precision_wait_queue.pop(0)
+            sm = self._state_machines.get(next_port)
+            if not sm:
+                continue
+            if not sm.can_trigger('cycles_complete'):
+                logger.info(
+                    '%s: Skipping queued precision promotion (state=%s)',
+                    next_port,
+                    sm.current_state,
+                )
+                continue
+            self._precision_owner_port = next_port
+            self._port_manager.set_alicat_poll_profile(next_port)
+            logger.info('%s: Precision slot granted from queue', next_port)
+            sm.trigger('cycles_complete')
+            return
+
+    def _reset_precision_coordination(self) -> None:
+        """Clear precision owner/queue state and return normal polling profile."""
+        self._precision_owner_port = None
+        self._precision_wait_queue.clear()
+        self._port_manager.set_alicat_poll_profile(None)
     
     def _on_hardware_readings(self, readings: Dict[PortId, PortReading]) -> None:
         """Callback from hardware polling thread - buffer readings for main thread processing."""
@@ -378,6 +456,9 @@ class WorkOrderController(QObject):
         except Exception as exc:
             logger.warning("Failed to read hardware status: %s", exc)
             status = {}
+        status['precision_owner'] = self._precision_owner_port or 'none'
+        status['precision_queue'] = list(self._precision_wait_queue)
+        status['alicat_poll_divisors'] = self._port_manager.get_alicat_poll_divisors()
         self._ui_bridge.update_hardware_status(status)
 
     def _refresh_database_status(self) -> None:
@@ -412,6 +493,7 @@ class WorkOrderController(QObject):
     
     def _on_logout_requested(self) -> None:
         """Handle logout/end work order - reset all ports and clear work order data."""
+        self._reset_precision_coordination()
         # Cancel any running test executors and reset ports
         for port_id in ('port_a', 'port_b'):
             # Cancel any running executor first
@@ -773,8 +855,8 @@ class WorkOrderController(QObject):
 
     def _get_barometric_pressure(self, port_id: str) -> float:
         reading = self._get_latest_reading(port_id)
-        inferred = self._infer_barometric_pressure_from_reading(reading)
-        if inferred is not None and math.isfinite(inferred) and 8.0 <= inferred <= 17.5:
+        inferred = infer_barometric_pressure(reading)
+        if _domain_is_plausible_barometric_psi(inferred):
             inferred_value = float(inferred)
             self._last_barometric_psi[port_id] = inferred_value
             self._barometric_warning_issued[port_id] = False
@@ -789,69 +871,38 @@ class WorkOrderController(QObject):
             )
             self._barometric_warning_issued[port_id] = True
 
-        # Fallback: LabJack transducer absolute reading is usually near local atmosphere
-        # when idle and is more trustworthy than a malformed Alicat status parse.
-        if reading and reading.transducer and _is_plausible_barometric_psi(reading.transducer.pressure):
-            fallback = float(reading.transducer.pressure)
-            self._last_barometric_psi[port_id] = fallback
-            return fallback
-
         return self._last_barometric_psi.get(port_id, 14.7)
 
     def _infer_barometric_pressure_from_reading(self, reading: Optional[PortReading]) -> Optional[float]:
-        if reading is None or reading.alicat is None:
-            return None
-        if reading.alicat.barometric_pressure is not None:
-            return reading.alicat.barometric_pressure
-        if reading.alicat.pressure is not None and reading.alicat.gauge_pressure is not None:
-            return reading.alicat.pressure - reading.alicat.gauge_pressure
-        return None
+        return infer_barometric_pressure(reading)
 
     def _is_gauge_unit_label(self, unit_label: Optional[str]) -> bool:
-        label = (unit_label or "").strip().upper()
-        return label in {"PSIG", "PSI G", "PSI(G)"}
+        return is_gauge_unit_label(unit_label)
 
     def _resolve_display_reference(self, unit_label: Optional[str]) -> str:
-        if self._is_gauge_unit_label(unit_label):
-            return "gauge"
-        if (unit_label or "").strip().upper() == "PSI":
-            setup = self._current_test_setup
-            if setup and setup.pressure_reference:
-                return str(setup.pressure_reference).strip().lower()
-            return "absolute"
-        return "absolute"
+        setup = self._current_test_setup
+        setup_reference = setup.pressure_reference if setup else None
+        return resolve_display_reference(unit_label, setup_reference)
 
     def _infer_alicat_setpoint_reference(self, port_id: str, barometric_psi: float) -> str:
         reading = self._get_latest_reading(port_id)
-        if reading is None or reading.alicat is None or reading.alicat.setpoint is None:
-            if self._current_test_setup and self._current_test_setup.pressure_reference:
-                return str(self._current_test_setup.pressure_reference).strip().lower()
-            return "absolute"
-
-        setpoint = reading.alicat.setpoint
-        absolute_pressure = reading.alicat.pressure
-        gauge_pressure = reading.alicat.gauge_pressure
-
-        if gauge_pressure is not None:
-            absolute_candidate = gauge_pressure + barometric_psi
-            if abs(setpoint - absolute_candidate) < abs(setpoint - gauge_pressure):
-                return "absolute"
-            return "gauge"
-
-        if absolute_pressure is not None:
-            gauge_candidate = absolute_pressure - barometric_psi
-            if abs(setpoint - absolute_pressure) <= abs(setpoint - gauge_candidate):
-                return "absolute"
-            return "gauge"
-
-        if self._current_test_setup and self._current_test_setup.pressure_reference:
-            return str(self._current_test_setup.pressure_reference).strip().lower()
-        return "absolute"
+        fallback_reference = (
+            str(self._current_test_setup.pressure_reference).strip().lower()
+            if self._current_test_setup and self._current_test_setup.pressure_reference
+            else "absolute"
+        )
+        if reading is None or reading.alicat is None:
+            return fallback_reference
+        return infer_setpoint_reference(
+            setpoint=reading.alicat.setpoint,
+            absolute_pressure=reading.alicat.pressure,
+            gauge_pressure=reading.alicat.gauge_pressure,
+            barometric_psi=barometric_psi,
+            fallback_reference=fallback_reference,
+        )
 
     def _to_absolute_pressure(self, port_id: str, value_psi: float, pressure_reference: Optional[str]) -> float:
-        if str(pressure_reference or "").strip().lower() == "gauge":
-            return value_psi + self._get_barometric_pressure(port_id)
-        return value_psi
+        return to_absolute_pressure(value_psi, pressure_reference, self._get_barometric_pressure(port_id))
 
     def _to_display_pressure(
         self,
@@ -860,18 +911,19 @@ class WorkOrderController(QObject):
         unit_label: Optional[str],
         pressure_reference: Optional[str] = None,
     ) -> float:
-        # The test executor returns values in the PTP's reference frame
-        # For gauge PTP: values are already in gauge (PSIG)
-        # For absolute PTP: values are already in absolute (PSIA)
-        # So we just need to ensure the display unit matches
-        # If we want to display in gauge but the value is absolute, subtract barometric
-        if (
-            self._is_gauge_unit_label(unit_label)
-            and str(pressure_reference or "").strip().lower() == "absolute"
-        ):
-            # Converting from absolute PSIA to gauge PSIG
-            value_psi -= self._get_barometric_pressure(port_id)
-        return convert_pressure(value_psi, "PSI", unit_label or "PSI")
+        value_abs = value_psi
+        if str(pressure_reference or '').strip().lower() == 'gauge':
+            value_abs = to_absolute_pressure(
+                value_psi,
+                pressure_reference='gauge',
+                barometric_psi=self._get_barometric_pressure(port_id),
+            )
+        converted = to_display_pressure(
+            value_abs_psi=value_abs,
+            unit_label=unit_label or 'PSI',
+            barometric_psi=self._get_barometric_pressure(port_id),
+        )
+        return float(converted if converted is not None else value_abs)
 
     def _set_debug_dio_direction(self, port_id: str, payload: Dict[str, Any]) -> None:
         port = self._port_manager.get_port(port_id)
@@ -950,18 +1002,16 @@ class WorkOrderController(QObject):
         )
 
     def _extract_gauge_pressure_psi(self, port_id: str, reading: Optional[PortReading]) -> Optional[float]:
-        if reading is None or reading.transducer is None:
+        if reading is None or reading.alicat is None:
             return None
 
-        pressure = reading.transducer.pressure
-        reference = str(reading.transducer.pressure_reference or "gauge").strip().lower()
-        if reference == "gauge":
-            return pressure
+        if reading.alicat.gauge_pressure is not None:
+            return float(reading.alicat.gauge_pressure)
 
-        barometric = self._infer_barometric_pressure_from_reading(reading)
-        if barometric is None:
-            barometric = self._last_barometric_psi.get(port_id, 14.7)
-        return pressure - barometric
+        if reading.alicat.pressure is None:
+            return None
+        barometric = self._get_barometric_pressure(port_id)
+        return float(reading.alicat.pressure - barometric)
 
     def _apply_debug_solenoid_auto(
         self,
@@ -1079,6 +1129,8 @@ class WorkOrderController(QObject):
             self._launch_test_executor(port_id)
 
     def _on_cancel(self, port_id: str) -> None:
+        was_owner = self._precision_owner_port == port_id
+        self._remove_precision_waiter(port_id)
         # Cancel any running executor first
         executor = self._test_executors.get(port_id)
         if executor and executor.is_running:
@@ -1090,6 +1142,8 @@ class WorkOrderController(QObject):
                 sm.trigger('reset')
         # Vent hardware
         self._vent_port(port_id)
+        if was_owner:
+            self._release_precision_slot(port_id, reason='cancel')
 
     def _on_vent(self, port_id: str) -> None:
         sm = self._state_machines.get(port_id)
@@ -1367,6 +1421,7 @@ class WorkOrderController(QObject):
         if not sm:
             logger.warning('%s: Cannot trigger error - state machine not found', port_id)
             return
+        was_precision = sm.current_state == PortState.PRECISION_TEST.value
         
         # Only transition to error if we're in a state that allows it
         # If already in error state, just update the message
@@ -1384,11 +1439,15 @@ class WorkOrderController(QObject):
             )
             # If we can't transition to error, at least vent the port
             self._vent_port(port_id)
+            if was_precision:
+                self._release_precision_slot(port_id, reason='error-no-transition')
             return
         
         # Trigger error transition
         logger.info('%s: Triggering error transition: %s', port_id, message)
         sm.trigger('error', message=message)
+        if was_precision:
+            self._release_precision_slot(port_id, reason='error')
         
         # Ensure port is vented after error state is set
         # (TestExecutor should have already vented, but ensure it's done)
@@ -1399,7 +1458,8 @@ class WorkOrderController(QObject):
         if not sm:
             return
         if sm.can_trigger('cycles_complete'):
-            sm.trigger('cycles_complete')
+            if self._request_precision_slot(port_id):
+                sm.trigger('cycles_complete')
             return
         logger.debug(
             '%s: Ignoring late cycles_complete while in state %s',
@@ -1450,6 +1510,8 @@ class WorkOrderController(QObject):
                 port_id,
                 sm.current_state,
             )
+        # Always try release in case completion arrives after a local cancellation.
+        self._release_precision_slot(port_id, reason='edges-captured-signal')
         # Update pressure viz with measured points (final update with both values)
         setup = self._current_test_setup
         if setup and self._ui_bridge:
@@ -1587,6 +1649,8 @@ class WorkOrderController(QObject):
 
     def _slot_cancelled(self, port_id: str) -> None:
         logger.info('%s: Test cancelled', port_id)
+        self._remove_precision_waiter(port_id)
+        self._release_precision_slot(port_id, reason='executor-cancelled')
 
     def _slot_substate(self, port_id: str, substate: str) -> None:
         if self._ui_bridge:
@@ -1712,6 +1776,7 @@ class WorkOrderController(QObject):
 
     def cleanup(self) -> None:
         """Clean up hardware resources."""
+        self._reset_precision_coordination()
         # Cancel any running test executors
         for executor in self._test_executors.values():
             if executor.is_running:
@@ -1729,81 +1794,7 @@ class WorkOrderController(QObject):
     def _handle_debug_action(self, port_id: str, action: str, payload: Dict[str, Any]) -> None:
         """Handle debug actions from the debug panel."""
         try:
-            port = self._port_manager.get_port(port_id)
-            if not port:
-                logger.warning(f"Port {port_id} not found for debug action: {action}")
-                return
-            
-            if action == "set_mode":
-                mode = payload.get("mode", "pressurize")
-                if mode == "pressurize":
-                    self._debug_alicat_mode[port_id] = "pressurize"
-                    # Resume closed-loop control
-                    port.alicat.cancel_hold()
-                    logger.info(f"{port_id}: Alicat mode set to Pressurize (closed-loop)")
-                elif mode == "hold":
-                    self._debug_alicat_mode[port_id] = "hold"
-                    # Hold valve in current position
-                    port.alicat.hold_valve()
-                    logger.info(f"{port_id}: Alicat mode set to Hold")
-                elif mode == "vent":
-                    self._debug_alicat_mode[port_id] = "vent"
-                    # Vent mode always routes to atmosphere to avoid pulling to vacuum.
-                    self._set_debug_solenoid_mode(port_id, "atmosphere")
-                    port.vent_to_atmosphere()
-                    logger.info(f"{port_id}: Alicat mode set to Vent (forced atmosphere route)")
-                    
-            elif action == "set_solenoid_mode":
-                mode = str(payload.get("mode", "atmosphere"))
-                self._set_debug_solenoid_mode(port_id, mode)
-
-            elif action == "set_solenoid":
-                to_vacuum = bool(payload.get("to_vacuum", False))
-                self._set_debug_solenoid_mode(port_id, "vacuum" if to_vacuum else "atmosphere")
-                
-            elif action == "set_setpoint":
-                value = payload.get("value", 0.0)
-                units_label = self._ui_bridge.get_pressure_unit() if self._ui_bridge else "PSIG"
-                value_psi = convert_pressure(value, units_label, "PSI")
-                display_reference = self._resolve_display_reference(units_label)
-                value_abs_psi = self._to_absolute_pressure(port_id, value_psi, display_reference)
-                barometric_psi = self._get_barometric_pressure(port_id)
-                alicat_reference = self._infer_alicat_setpoint_reference(port_id, barometric_psi)
-                command_value = (
-                    value_abs_psi - barometric_psi
-                    if alicat_reference == "gauge"
-                    else value_abs_psi
-                )
-                port.set_pressure(command_value)
-                logger.info(
-                    "%s: Setpoint set to %.3f %s (display_ref=%s, command_ref=%s, command=%.3f)",
-                    port_id,
-                    float(value),
-                    units_label,
-                    display_reference,
-                    alicat_reference,
-                    command_value,
-                )
-                
-            elif action == "set_ramp_rate":
-                value = payload.get("value", 0.0)
-                units_label = self._ui_bridge.get_pressure_unit() if self._ui_bridge else "PSIG"
-                value_psi = convert_pressure(value, units_label, "PSI")
-                port.alicat.set_ramp_rate(value_psi)
-                logger.info(f"{port_id}: Ramp rate set to {value} {units_label}/s (={value_psi:.3f} PSI/s)")
-
-            elif action == "find_setpoint":
-                self._start_find_setpoint(port_id, payload)
-
-            elif action == "set_dio_direction":
-                self._set_debug_dio_direction(port_id, payload)
-
-            elif action == "read_dio_all":
-                self._read_debug_dio_all(port_id)
-                
-            else:
-                logger.warning(f"Unknown debug action: {action}")
-                
+            self._debug_actions.handle(port_id, action, payload)
         except Exception as e:
             logger.error(f"Error handling debug action {action} for {port_id}: {e}", exc_info=True)
             self._ui_bridge.show_error_message("Debug action failed", str(e))
@@ -1811,27 +1802,86 @@ class WorkOrderController(QObject):
     def _handle_admin_action(self, action: str, payload: Dict[str, Any]) -> None:
         """Handle admin actions from the admin panel."""
         try:
-            if action == "set_main_measurement_source":
-                self._set_main_measurement_source(payload)
-                return
-
-            if action in {
-                "refresh_hardware",
-                "refresh_db",
-                "reconnect_hardware",
-                "reconnect_db",
-                "open_logs",
-                "export_logs",
-                "export_history",
-                "safety_override",
-            }:
-                logger.info("Admin action requested: %s payload=%s", action, payload)
-                return
-
-            logger.warning("Unknown admin action: %s payload=%s", action, payload)
+            self._admin_actions.handle(action, payload)
         except Exception as exc:
             logger.error("Error handling admin action %s: %s", action, exc, exc_info=True)
             self._ui_bridge.show_error_message("Admin action failed", str(exc))
+
+    def _get_ui_pressure_unit(self) -> str:
+        return self._ui_bridge.get_pressure_unit() if self._ui_bridge else 'PSI'
+
+    def _set_debug_alicat_mode(self, port_id: str, mode: str) -> None:
+        self._debug_alicat_mode[port_id] = str(mode or 'pressurize').strip().lower()
+
+    def _convert_debug_display_to_abs_psi(self, port_id: str, value_psi: float, units_label: str) -> float:
+        display_reference = self._resolve_display_reference(units_label)
+        return self._to_absolute_pressure(port_id, value_psi, display_reference)
+
+    def _resolve_alicat_command_reference(self, port_id: str) -> tuple[float, str]:
+        barometric_psi = self._get_barometric_pressure(port_id)
+        alicat_reference = self._infer_alicat_setpoint_reference(port_id, barometric_psi)
+        return barometric_psi, alicat_reference
+
+    def _reconnect_hardware(self) -> None:
+        self._reset_precision_coordination()
+        self._port_manager.stop_polling()
+        self._port_manager.disconnect_all()
+        connected = self._port_manager.connect_all()
+        self._port_manager.start_polling()
+        self._port_manager.set_alicat_poll_profile(None)
+        self._refresh_hardware_status()
+        level = self._ui_bridge.show_info_message if connected else self._ui_bridge.show_error_message
+        level('Admin', 'Hardware reconnect completed.' if connected else 'Hardware reconnect completed with failures.')
+
+    def _reconnect_database(self) -> None:
+        close_database()
+        db_cfg = self._config.get('database', {})
+        connected = initialize_database(db_cfg if isinstance(db_cfg, dict) else {})
+        self._refresh_database_status()
+        level = self._ui_bridge.show_info_message if connected else self._ui_bridge.show_error_message
+        level('Admin', 'Database reconnect successful.' if connected else 'Database reconnect failed.')
+
+    def _log_dir(self) -> Path:
+        log_cfg = self._config.get('logging', {})
+        log_dir = Path(log_cfg.get('log_dir', 'logs'))
+        if not log_dir.is_absolute():
+            project_root = Path(__file__).resolve().parents[2]
+            log_dir = project_root / log_dir
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+
+    def _open_logs(self) -> None:
+        log_dir = self._log_dir()
+        try:
+            os.startfile(str(log_dir))  # type: ignore[attr-defined]
+        except Exception:
+            logger.info('Log directory: %s', log_dir)
+        self._ui_bridge.show_info_message('Admin', f'Log directory: {log_dir}')
+
+    def _export_logs(self) -> None:
+        log_dir = self._log_dir()
+        archive_base = log_dir / f'stinger_logs_{time.strftime("%Y%m%d_%H%M%S")}'
+        archive_path = shutil.make_archive(str(archive_base), 'zip', root_dir=str(log_dir))
+        self._ui_bridge.show_info_message('Admin', f'Logs exported to {archive_path}')
+
+    def _export_history(self) -> None:
+        history = {
+            'timestamp': time.time(),
+            'last_barometric_psi': self._last_barometric_psi,
+            'cycle_estimates_abs_psi': self._cycle_estimates_abs_psi,
+        }
+        out_path = self._log_dir() / f'run_history_{time.strftime("%Y%m%d_%H%M%S")}.yaml'
+        import yaml
+        out_path.write_text(yaml.safe_dump(history, sort_keys=False), encoding='utf-8')
+        self._ui_bridge.show_info_message('Admin', f'History exported to {out_path}')
+
+    def _safety_override(self, payload: Dict[str, Any]) -> None:
+        enabled = bool(payload.get('enabled', False))
+        logger.warning('Safety override requested: enabled=%s payload=%s', enabled, payload)
+        self._ui_bridge.show_info_message(
+            'Admin',
+            'Safety override is logged only; no runtime bypass has been enabled.',
+        )
 
     def _set_main_measurement_source(self, payload: Dict[str, Any]) -> None:
         requested = str(payload.get("preferred_source", "transducer") or "transducer").strip().lower()

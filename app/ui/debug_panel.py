@@ -1,9 +1,5 @@
-"""
-Debug panel widget for manual hardware control.
-"""
-from collections import deque
-from statistics import pstdev
-from typing import Optional, cast
+"""Debug panel widget for manual hardware control."""
+from typing import Any, Optional, cast
 
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QDoubleValidator
@@ -12,6 +8,10 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QComboBox, QCheckBox, QGridLayout, QTabWidget
 )
 
+from app.services.noise_estimator import (
+    ResidualNoiseEstimator,
+    parse_debug_noise_settings,
+)
 from app.ui.widgets.pressure_chart import PressureChartWidget
 
 class LEDIndicator(QWidget):
@@ -60,7 +60,13 @@ class DebugPortPanel(QFrame):
     
     action_requested = pyqtSignal(str, dict)
     
-    def __init__(self, port_id: str, title: str, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        port_id: str,
+        title: str,
+        noise_config: Optional[dict[str, Any]] = None,
+        parent: Optional[QWidget] = None,
+    ):
         super().__init__(parent)
         self._port_id = port_id
         self._title = title
@@ -85,7 +91,7 @@ class DebugPortPanel(QFrame):
         self._nc_pin: Optional[int] = None
         self._noise_indicator: Optional[QLabel] = None
         self._noise_value: Optional[QLabel] = None
-        self._noise_window = deque(maxlen=30)
+        self._noise_estimator = ResidualNoiseEstimator(parse_debug_noise_settings(noise_config))
         self._last_setpoint_value: Optional[float] = None
         self._sweep_mode_combo: Optional[QComboBox] = None
         self._find_setpoint_btn: Optional[QPushButton] = None
@@ -359,42 +365,6 @@ class DebugPortPanel(QFrame):
         find_row.addStretch()
         io_layout.addLayout(find_row)
 
-        switch_row = QHBoxLayout()
-        switch_row.setSpacing(20)
-
-        no_layout = QHBoxLayout()
-        no_layout.setSpacing(8)
-        no_label = QLabel("NO:")
-        no_label.setStyleSheet("color: #6b7280; font-size: 13px;")
-        no_layout.addWidget(no_label)
-        self._no_pin_label = QLabel("DIO--")
-        self._no_pin_label.setStyleSheet("color: #1a1a2e; font-size: 12px;")
-        no_layout.addWidget(self._no_pin_label)
-        self._no_led = LEDIndicator()
-        no_layout.addWidget(self._no_led)
-        self._no_state_label = QLabel("LOW")
-        self._no_state_label.setStyleSheet("color: #1a1a2e; font-size: 12px; font-weight: bold;")
-        no_layout.addWidget(self._no_state_label)
-        switch_row.addLayout(no_layout)
-
-        nc_layout = QHBoxLayout()
-        nc_layout.setSpacing(8)
-        nc_label = QLabel("NC:")
-        nc_label.setStyleSheet("color: #6b7280; font-size: 13px;")
-        nc_layout.addWidget(nc_label)
-        self._nc_pin_label = QLabel("DIO--")
-        self._nc_pin_label.setStyleSheet("color: #1a1a2e; font-size: 12px;")
-        nc_layout.addWidget(self._nc_pin_label)
-        self._nc_led = LEDIndicator()
-        nc_layout.addWidget(self._nc_led)
-        self._nc_state_label = QLabel("LOW")
-        self._nc_state_label.setStyleSheet("color: #1a1a2e; font-size: 12px; font-weight: bold;")
-        nc_layout.addWidget(self._nc_state_label)
-        switch_row.addLayout(nc_layout)
-
-        switch_row.addStretch()
-        io_layout.addLayout(switch_row)
-
         dio_controls = QHBoxLayout()
         dio_controls.setSpacing(8)
         dio_label = QLabel("DIO Control:")
@@ -454,6 +424,42 @@ class DebugPortPanel(QFrame):
         io_layout.addStretch()
 
         controls_tabs.addTab(io_tab, "I/O & Diagnostics")
+
+        no_nc_header = QWidget()
+        switch_row = QHBoxLayout(no_nc_header)
+        switch_row.setContentsMargins(8, 4, 12, 4)
+        switch_row.setSpacing(20)
+        no_layout = QHBoxLayout()
+        no_layout.setSpacing(8)
+        no_label = QLabel("NO:")
+        no_label.setStyleSheet("color: #6b7280; font-size: 13px;")
+        no_layout.addWidget(no_label)
+        self._no_pin_label = QLabel("DIO--")
+        self._no_pin_label.setStyleSheet("color: #1a1a2e; font-size: 12px;")
+        no_layout.addWidget(self._no_pin_label)
+        self._no_led = LEDIndicator()
+        no_layout.addWidget(self._no_led)
+        self._no_state_label = QLabel("LOW")
+        self._no_state_label.setStyleSheet("color: #1a1a2e; font-size: 12px; font-weight: bold;")
+        no_layout.addWidget(self._no_state_label)
+        switch_row.addLayout(no_layout)
+        nc_layout = QHBoxLayout()
+        nc_layout.setSpacing(8)
+        nc_label = QLabel("NC:")
+        nc_label.setStyleSheet("color: #6b7280; font-size: 13px;")
+        nc_layout.addWidget(nc_label)
+        self._nc_pin_label = QLabel("DIO--")
+        self._nc_pin_label.setStyleSheet("color: #1a1a2e; font-size: 12px;")
+        nc_layout.addWidget(self._nc_pin_label)
+        self._nc_led = LEDIndicator()
+        nc_layout.addWidget(self._nc_led)
+        self._nc_state_label = QLabel("LOW")
+        self._nc_state_label.setStyleSheet("color: #1a1a2e; font-size: 12px; font-weight: bold;")
+        nc_layout.addWidget(self._nc_state_label)
+        switch_row.addLayout(nc_layout)
+        switch_row.addStretch()
+        controls_tabs.setCornerWidget(no_nc_header, Qt.Corner.TopRightCorner)
+
         layout.addWidget(controls_tabs)
         
     def _button_style(self) -> str:
@@ -671,10 +677,12 @@ class DebugPortPanel(QFrame):
         elif self._setpoint_value and self._last_setpoint_value is not None:
             self._setpoint_value.setText(f"{self._last_setpoint_value:.2f} {self._units_label}")
         if pressure is not None:
-            self._noise_window.append(pressure)
-            if len(self._noise_window) >= 5:
-                noise = pstdev(self._noise_window)
+            noise = self._noise_estimator.update(pressure, timestamp, setpoint=setpoint)
+            in_holdoff = self._noise_estimator.in_holdoff(timestamp)
+            if noise is not None:
                 self._update_noise_indicator(noise)
+            if in_holdoff:
+                self._set_noise_indicator_hold()
             
     def update_switch_states(self, no_active: bool, nc_active: bool) -> None:
         """Update the NO/NC switch LED indicators."""
@@ -699,6 +707,10 @@ class DebugPortPanel(QFrame):
         """Clear the pressure chart data."""
         if self._chart:
             self._chart.clear()
+        self._noise_estimator.reset()
+        if self._noise_value is not None:
+            self._noise_value.setText("--")
+        self._set_noise_indicator_hold()
 
     def set_units_label(self, units_label: str) -> None:
         """Update unit labels for chart and controls."""
@@ -710,6 +722,8 @@ class DebugPortPanel(QFrame):
             self._ramp_label.setText(f"Ramp Rate ({label}/s):")
         if self._chart:
             self._chart.set_units_label(label)
+        self._noise_estimator.reset()
+        self._set_noise_indicator_hold()
         if self._pressure_value is not None:
             pressure_value = cast(QLabel, self._pressure_value)
             if pressure_value.text().startswith("--"):
@@ -740,6 +754,11 @@ class DebugPortPanel(QFrame):
             self._noise_indicator.setStyleSheet(
                 f"background-color: {color}; border-radius: 5px;"
             )
+
+    def _set_noise_indicator_hold(self) -> None:
+        """Show holdoff state during large transitions."""
+        if self._noise_indicator is not None:
+            self._noise_indicator.setStyleSheet("background-color: #9ca3af; border-radius: 5px;")
             
     def get_port_id(self) -> str:
         """Get the port ID for this panel."""

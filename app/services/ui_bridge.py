@@ -13,42 +13,16 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from ..hardware.port import PortId, PortReading
 from .measurement_source import get_measurement_settings, select_main_pressure_abs_psi
-from .ptp_service import convert_pressure, ATMOSPHERE_BY_UNIT
+from .pressure_domain import (
+    infer_barometric_pressure,
+    infer_setpoint_abs_psi,
+    is_gauge_unit_label,
+    to_absolute_pressure,
+    to_display_pressure,
+)
+from .ptp_service import convert_pressure
 
 logger = logging.getLogger(__name__)
-
-
-def _compute_psi_multiplier(from_unit: str, to_unit: str) -> float:
-    """Compute conversion multiplier between units (via PSI as intermediate).
-    
-    Pre-computes conversion factors to avoid repeated string normalization
-    and dictionary lookups in hot paths.
-    """
-    if from_unit == to_unit:
-        return 1.0
-    
-    # Normalize unit labels
-    from_norm = (from_unit or "PSI").strip().upper()
-    to_norm = (to_unit or "PSI").strip().upper()
-    
-    # Handle PSIG variations
-    if from_norm in ("PSIG", "PSI G", "PSI(G)"):
-        from_norm = "PSI"
-    if to_norm in ("PSIG", "PSI G", "PSI(G)"):
-        to_norm = "PSI"
-    
-    if from_norm == to_norm:
-        return 1.0
-    
-    # Convert to PSI first
-    from_atm = ATMOSPHERE_BY_UNIT.get(from_norm, 14.7)
-    to_atm = ATMOSPHERE_BY_UNIT.get(to_norm, 14.7)
-    
-    if from_atm == 0 or to_atm == 0:
-        return 1.0
-    
-    # Multiplier = (to_atm / 14.7) / (from_atm / 14.7) = to_atm / from_atm
-    return to_atm / from_atm
 
 
 class UIBridge(QObject):
@@ -167,22 +141,11 @@ class UIBridge(QObject):
             },
         }
         
-        # Cache for unit conversion multipliers to avoid repeated calculations
-        self._unit_multiplier_cache: Dict[tuple[str, str], float] = {}
-        
         logger.info("UIBridge initialized")
-    
-    def _get_cached_multiplier(self, from_unit: str, to_unit: str) -> float:
-        """Get cached conversion multiplier, computing if necessary."""
-        key = (from_unit, to_unit)
-        if key not in self._unit_multiplier_cache:
-            self._unit_multiplier_cache[key] = _compute_psi_multiplier(from_unit, to_unit)
-        return self._unit_multiplier_cache[key]
 
     @staticmethod
     def _is_gauge_unit(unit_label: Optional[str]) -> bool:
-        label = (unit_label or "").strip().upper()
-        return label in {"PSIG", "PSI G", "PSI(G)"}
+        return is_gauge_unit_label(unit_label)
 
     def _to_display_pressure(
         self,
@@ -190,17 +153,10 @@ class UIBridge(QObject):
         unit_label: str,
         barometric_psi: float,
     ) -> Optional[float]:
-        if value_abs_psi is None:
-            return None
-        if self._is_gauge_unit(unit_label):
-            return value_abs_psi - barometric_psi
-        return convert_pressure(value_abs_psi, "PSI", unit_label)
+        return to_display_pressure(value_abs_psi, unit_label, barometric_psi)
 
     def _to_absolute_pressure(self, value_psi: float, source_reference: Optional[str], barometric_psi: float) -> float:
-        reference = (source_reference or "absolute").strip().lower()
-        if reference == "gauge":
-            return value_psi + barometric_psi
-        return value_psi
+        return to_absolute_pressure(value_psi, source_reference, barometric_psi)
 
     def _infer_setpoint_abs_psi(
         self,
@@ -209,34 +165,15 @@ class UIBridge(QObject):
         gauge_pressure: Optional[float],
         barometric_psi: float,
     ) -> Optional[float]:
-        if setpoint is None:
-            return None
-
-        if gauge_pressure is not None:
-            absolute_candidate = gauge_pressure + barometric_psi
-            if abs(setpoint - absolute_candidate) < abs(setpoint - gauge_pressure):
-                return setpoint
-            return setpoint + barometric_psi
-
-        if absolute_alicat is not None:
-            gauge_candidate = absolute_alicat - barometric_psi
-            if abs(setpoint - absolute_alicat) <= abs(setpoint - gauge_candidate):
-                return setpoint
-            return setpoint + barometric_psi
-
-        return setpoint
+        return infer_setpoint_abs_psi(
+            setpoint=setpoint,
+            absolute_alicat=absolute_alicat,
+            gauge_pressure=gauge_pressure,
+            barometric_psi=barometric_psi,
+        )
 
     def _infer_barometric_pressure(self, reading: Optional[PortReading]) -> Optional[float]:
-        if reading is None or reading.alicat is None:
-            return None
-        if reading.alicat.barometric_pressure is not None:
-            return reading.alicat.barometric_pressure
-        if (
-            reading.alicat.pressure is not None
-            and reading.alicat.gauge_pressure is not None
-        ):
-            return reading.alicat.pressure - reading.alicat.gauge_pressure
-        return None
+        return infer_barometric_pressure(reading)
     
     # -------------------------------------------------------------------------
     # Work order management

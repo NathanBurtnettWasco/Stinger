@@ -51,3 +51,40 @@ Stinger integrates with the existing SQL Server schema:
 
 See `docs/DATABASE_CONTRACT.md` for full contract.
 
+## Build and Publish (Windows EXE)
+
+Stinger can be packaged as a single-file EXE with PyInstaller and published to the shared drive:
+`Z:\Engineering\Program Builds\Python Builds`.
+
+### 1) Build onefile EXE
+
+From repo root in PowerShell:
+
+`.\scripts\build_stinger.ps1 -InstallPyInstaller`
+
+Outputs:
+- `dist\Stinger\Stinger.exe`
+- `dist\Stinger\stinger_config.yaml`
+- `dist\Stinger\build_manifest.json`
+
+### 2) Publish to shared drive
+
+`.\scripts\publish_stinger_build.ps1`
+
+Publishes to:
+- `Z:\Engineering\Program Builds\Python Builds\Stinger\<timestamp>\`
+- updates:
+  - `Z:\Engineering\Program Builds\Python Builds\Stinger\latest.json`
+  - `Z:\Engineering\Program Builds\Python Builds\Stinger\latest.txt`
+
+### Rollback
+
+To roll back, use a previous timestamped folder in
+`Z:\Engineering\Program Builds\Python Builds\Stinger\`.
+Set consumers to that folder, or set `latest.txt`/`latest.json` back to the previous build.
+
+### Notes
+
+- Onefile EXE startup can be slightly slower because it self-extracts at launch.
+- `stinger_config.yaml` should remain editable next to `Stinger.exe` for machine-specific settings.
+

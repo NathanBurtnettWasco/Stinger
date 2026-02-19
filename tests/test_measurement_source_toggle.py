@@ -8,48 +8,15 @@ from typing import Any, cast
 import yaml
 
 from app.core.config import load_config, save_config
-from app.hardware.alicat import AlicatReading
-from app.hardware.labjack import TransducerReading
-from app.hardware.port import PortReading
 from app.services.measurement_source import select_main_pressure_abs_psi
 from app.services.ptp_service import TestSetup
 from app.services.test_executor import TestExecutor as _TestExecutor
 from app.services.ui_bridge import UIBridge
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+from tests.fixtures.pressure_data import build_port_reading
 
 
 def _base_config() -> dict[str, Any]:
-    with (_repo_root() / 'stinger_config.yaml').open('r', encoding='utf-8') as handle:
-        return cast(dict[str, Any], yaml.safe_load(handle))
-
-
-def _build_reading(
-    *,
-    transducer_abs_psi: float = 11.0,
-    alicat_abs_psi: float | None = 21.0,
-    alicat_gauge_psi: float | None = None,
-    barometric_psi: float | None = 14.7,
-) -> PortReading:
-    return PortReading(
-        transducer=TransducerReading(
-            voltage=2.5,
-            pressure=transducer_abs_psi,
-            pressure_raw=transducer_abs_psi,
-            pressure_reference='absolute',
-            timestamp=1.0,
-        ),
-        alicat=AlicatReading(
-            pressure=alicat_abs_psi,
-            setpoint=0.0,
-            timestamp=1.0,
-            gauge_pressure=alicat_gauge_psi,
-            barometric_pressure=barometric_psi,
-        ),
-        timestamp=1.0,
-    )
+    return load_config()
 
 
 def _executor_config(preferred_source: str) -> dict[str, Any]:
@@ -130,8 +97,8 @@ def test_load_config_applies_measurement_defaults_when_missing(tmp_path: Path) -
 
     loaded = load_config(path)
     measurement_cfg = loaded['hardware']['measurement']
-    assert measurement_cfg['preferred_source'] == 'transducer'
-    assert measurement_cfg['fallback_on_unavailable'] is True
+    assert measurement_cfg['preferred_source'] == 'alicat'
+    assert measurement_cfg['fallback_on_unavailable'] is False
 
 
 def test_save_config_persists_normalized_measurement_source(tmp_path: Path) -> None:
@@ -153,7 +120,9 @@ def test_save_config_persists_normalized_measurement_source(tmp_path: Path) -> N
 
 
 def test_select_main_pressure_abs_psi_prefers_requested_source_with_fallback() -> None:
-    reading = _build_reading(transducer_abs_psi=10.0, alicat_abs_psi=None)
+    reading = build_port_reading(transducer_pressure=10.0, alicat_pressure=0.0)
+    assert reading.alicat is not None
+    reading.alicat.pressure = None
     selected, source = select_main_pressure_abs_psi(
         reading=reading,
         preferred_source='alicat',
@@ -180,7 +149,10 @@ def test_ui_bridge_uses_selected_main_source_for_display() -> None:
         lambda port_id, pressure, unit: emitted.append((port_id, pressure, unit))
     )
     bridge.set_pressure_unit('PSIA')
-    bridge.update_pressure('port_a', _build_reading(transducer_abs_psi=10.0, alicat_abs_psi=22.0))
+    bridge.update_pressure(
+        'port_a',
+        build_port_reading(transducer_pressure=10.0, alicat_pressure=22.0),
+    )
 
     assert emitted
     assert emitted[-1][1] == 22.0
@@ -189,5 +161,5 @@ def test_ui_bridge_uses_selected_main_source_for_display() -> None:
 
 def test_executor_uses_selected_main_source_for_test_pressure() -> None:
     executor = _build_executor('alicat')
-    reading = _build_reading(transducer_abs_psi=10.0, alicat_abs_psi=26.0)
+    reading = build_port_reading(transducer_pressure=10.0, alicat_pressure=26.0)
     assert executor._reading_pressure_abs_psi(reading) == 26.0

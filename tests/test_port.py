@@ -153,9 +153,16 @@ def test_configure_from_ptp_maps_terminal_pins(monkeypatch: Any) -> None:
 def test_set_solenoid_refuses_unsafe_vacuum(monkeypatch: Any) -> None:
     port = _make_port(monkeypatch, solenoid_cfg={'safe_vacuum_switch_threshold_psi': 2.0})
     daq = port.daq
+    alicat = port.alicat
     assert isinstance(daq, _FakeLabJackController)
-    daq.pressure_reference = 'gauge'
-    daq.next_pressure = 10.0
+    assert isinstance(alicat, _FakeAlicatController)
+    alicat.next_reading = AlicatReading(
+        pressure=20.0,
+        setpoint=20.0,
+        timestamp=1.0,
+        gauge_pressure=5.3,
+        barometric_pressure=14.7,
+    )
 
     assert not port.set_solenoid(True)
     assert daq.solenoid_calls == []
@@ -164,9 +171,16 @@ def test_set_solenoid_refuses_unsafe_vacuum(monkeypatch: Any) -> None:
 def test_set_solenoid_allows_safe_vacuum_and_resets_filter(monkeypatch: Any) -> None:
     port = _make_port(monkeypatch, solenoid_cfg={'safe_vacuum_switch_threshold_psi': 2.0})
     daq = port.daq
+    alicat = port.alicat
     assert isinstance(daq, _FakeLabJackController)
-    daq.pressure_reference = 'absolute'
-    daq.next_pressure = 15.0
+    assert isinstance(alicat, _FakeAlicatController)
+    alicat.next_reading = AlicatReading(
+        pressure=15.0,
+        setpoint=15.0,
+        timestamp=1.0,
+        gauge_pressure=0.3,
+        barometric_pressure=14.7,
+    )
 
     assert port.set_solenoid(True)
     assert daq.solenoid_calls == [True]
@@ -310,9 +324,34 @@ def test_port_manager_poll_loop_refreshes_cached_alicat(monkeypatch: Any) -> Non
     assert callback_count['value'] == 1
     for port in manager.ports.values():
         assert isinstance(port, _FakeManagedPort)
-        # One refresh while seeding, one at cycle 0.
-        assert port.refresh_calls == 2
+        # One refresh while seeding; first loop respects divisor countdown.
+        assert port.refresh_calls == 1
         assert port.read_fast_calls == 1
+
+
+def test_port_manager_runtime_poll_profile_switch(monkeypatch: Any) -> None:
+    monkeypatch.setattr(port_module, 'Port', _FakeManagedPort)
+    manager = PortManager(_manager_config())
+    manager.initialize_ports()
+
+    # Defaults to normal divisor.
+    divisors = manager.get_alicat_poll_divisors()
+    assert divisors['port_a'] == 5
+    assert divisors['port_b'] == 5
+
+    # Precision profile: one owner gets precision divisor, others normal.
+    manager._alicat_poll_divisor_normal = 14
+    manager._alicat_poll_divisor_precision = 2
+    manager.set_alicat_poll_profile('port_b')
+    divisors = manager.get_alicat_poll_divisors()
+    assert divisors['port_a'] == 14
+    assert divisors['port_b'] == 2
+
+    # Manual override for one port.
+    assert manager.set_alicat_poll_divisor('port_a', 9)
+    divisors = manager.get_alicat_poll_divisors()
+    assert divisors['port_a'] == 9
+    assert divisors['port_b'] == 2
 
 
 def test_port_manager_disconnect_all_clears_ports(monkeypatch: Any) -> None:

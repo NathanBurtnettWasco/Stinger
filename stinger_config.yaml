@@ -20,6 +20,12 @@ hardware:
       transducer_pressure_max: 115.0
       transducer_reference: "absolute"
       transducer_offset_psi: -0.383
+      transducer_nonlinear_correction:
+        breakpoint_psi: 5.0
+        low_slope_error_per_psi: 0.002754
+        low_intercept_error_psi: 0.009341
+        high_slope_error_per_psi: -0.001457
+        high_intercept_error_psi: 0.009642
       switch_no_dio: 2
       switch_nc_dio: 0
       switch_com_dio: 3
@@ -36,6 +42,12 @@ hardware:
       transducer_pressure_max: 115.0
       transducer_reference: "absolute"
       transducer_offset_psi: 0.09
+      transducer_nonlinear_correction:
+        breakpoint_psi: 5.0
+        low_slope_error_per_psi: -0.003546
+        low_intercept_error_psi: 0.005638
+        high_slope_error_per_psi: -0.001573
+        high_intercept_error_psi: -0.007328
       switch_no_dio: 9
       switch_nc_dio: 11
       switch_com_dio: 12
@@ -44,7 +56,7 @@ hardware:
       solenoid_dio: 18
 
   alicat:
-    baudrate: 19200
+    baudrate: 115200
     timeout_s: 0.05
     auto_tare_on_connect: true
     auto_tare_max_delta_psi: 0.5
@@ -72,8 +84,8 @@ hardware:
     safe_vacuum_switch_threshold_psi: 2.0
 
   measurement:
-    preferred_source: "transducer"
-    fallback_on_unavailable: true
+    preferred_source: "alicat"
+    fallback_on_unavailable: false
 
 control:
   ramps:
@@ -85,6 +97,8 @@ control:
   edge_detection:
     overshoot_beyond_limit_percent: 10.0
     timeout_sec: 60.0
+    precision_post_target_grace_sec: 0.35
+    precision_return_overshoot_torr: 12.0
 
   debounce:
     stable_sample_count: 3
@@ -93,7 +107,9 @@ control:
 timing:
   ui_refresh_interval_ms: 16
   hardware_poll_interval_ms: 7
-  alicat_poll_divisor: 10        # Read Alicat every Nth fast cycle (~70-100ms)
+  alicat_poll_divisor: 4        # Legacy fallback if normal/precision divisors are absent
+  alicat_poll_divisor_normal: 14 # Non-precision ports: ~98ms cadence (~10 Hz)
+  alicat_poll_divisor_precision: 2 # Precision owner: request every ~14ms (bounded by bus/device)
   button_lockout_ms: 300
   graceful_stop_timeout_sec: 5.0
 
@@ -110,6 +126,12 @@ ui:
   theme: "dark"
   min_touch_target_px: 44
   admin_pin: "2245"
+  debug_noise:
+    window_samples: 60
+    min_samples: 12
+    trend_alpha: 0.2
+    transition_sigma_factor: 8.0
+    max_holdoff_ms: 350
 
   pressure_display:
     decimal_places: 2

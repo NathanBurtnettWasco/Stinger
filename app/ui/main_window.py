@@ -711,8 +711,9 @@ class MainWindow(QMainWindow):
         ports_row.setSpacing(16)
         labjack_config = self.config.get("hardware", {}).get("labjack", {})
 
+        debug_noise_cfg = self.config.get("ui", {}).get("debug_noise", {})
         for port_id, title in [("port_a", "Port A Debug"), ("port_b", "Port B Debug")]:
-            panel = DebugPortPanel(port_id, title)
+            panel = DebugPortPanel(port_id, title, noise_config=debug_noise_cfg)
             panel.action_requested.connect(
                 lambda action, payload, pid=port_id: self._emit_debug_action(pid, action, payload)
             )
@@ -765,6 +766,9 @@ class MainWindow(QMainWindow):
         hardware_layout.addLayout(self._build_admin_status_row("Alicat", "hardware_alicat"))
         hardware_layout.addLayout(self._build_admin_status_row("DAQ", "hardware_daq"))
         hardware_layout.addLayout(self._build_admin_status_row("Serial", "hardware_serial"))
+        hardware_layout.addLayout(self._build_admin_status_row("Precision Owner", "precision_owner"))
+        hardware_layout.addLayout(self._build_admin_status_row("Precision Queue", "precision_queue"))
+        hardware_layout.addLayout(self._build_admin_status_row("Alicat Poll", "alicat_poll_profile"))
         hardware_layout.addLayout(self._build_admin_action_row([
             ("Reconnect Hardware", lambda: self._emit_admin_action("reconnect_hardware", {})),
             ("Refresh", lambda: self._emit_admin_action("refresh_hardware", {})),
@@ -1135,12 +1139,21 @@ class MainWindow(QMainWindow):
         alicat_status = self._format_hardware_component_status(status, "alicat")
         daq_status = self._format_hardware_component_status(status, "daq")
         serial_status = "Live"
+        precision_owner = self._format_precision_owner(status.get("precision_owner"))
+        precision_queue = self._format_precision_queue(status.get("precision_queue"))
+        poll_profile = self._format_alicat_poll_profile(status.get("alicat_poll_divisors"))
         if "hardware_alicat" in self._admin_labels:
             self._apply_status_from_text(self._admin_labels["hardware_alicat"], alicat_status)
         if "hardware_daq" in self._admin_labels:
             self._apply_status_from_text(self._admin_labels["hardware_daq"], daq_status)
         if "hardware_serial" in self._admin_labels:
             self._apply_status_from_text(self._admin_labels["hardware_serial"], serial_status)
+        if "precision_owner" in self._admin_labels:
+            self._apply_status_from_text(self._admin_labels["precision_owner"], precision_owner)
+        if "precision_queue" in self._admin_labels:
+            self._apply_status_from_text(self._admin_labels["precision_queue"], precision_queue)
+        if "alicat_poll_profile" in self._admin_labels:
+            self._apply_status_from_text(self._admin_labels["alicat_poll_profile"], poll_profile)
         self._refresh_status_level()
 
     def _on_database_status_updated(self, status: Dict[str, Any]) -> None:
@@ -1248,6 +1261,32 @@ class MainWindow(QMainWindow):
         if isinstance(port_status.get("alicat"), dict):
             alicat_status = str(port_status["alicat"].get("status", "Unknown"))
         return f"DAQ {daq_status} | Alicat {alicat_status}"
+
+    @staticmethod
+    def _format_precision_owner(owner: Any) -> str:
+        owner_text = str(owner or "none").strip().lower()
+        if owner_text in {"", "none"}:
+            return "Idle"
+        if owner_text in {"port_a", "port_b"}:
+            return owner_text.replace("_", " ").upper()
+        return str(owner)
+
+    @staticmethod
+    def _format_precision_queue(queue: Any) -> str:
+        if not isinstance(queue, list) or not queue:
+            return "Empty"
+        display = [str(item).replace("_", " ").upper() for item in queue]
+        return ", ".join(display)
+
+    @staticmethod
+    def _format_alicat_poll_profile(divisors: Any) -> str:
+        if not isinstance(divisors, dict):
+            return "Unknown"
+        a = divisors.get("port_a")
+        b = divisors.get("port_b")
+        if a is None and b is None:
+            return "Unknown"
+        return f"A:{a if a is not None else '-'} B:{b if b is not None else '-'}"
 
     def get_port_widget(self, port_id: str) -> 'PortColumn':
         """Get the widget for a specific port."""

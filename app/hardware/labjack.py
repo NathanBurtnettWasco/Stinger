@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from app.services.pressure_calibration import apply_error_model, build_legacy_two_band_model
+
 logger = logging.getLogger(__name__)
 
 ljm: Any = None
@@ -82,6 +84,29 @@ class LabJackController:
         self.pressure_max = config.get('transducer_pressure_max', 115.0)
         self.pressure_reference = str(config.get('transducer_reference', 'absolute')).lower()
         self.pressure_offset = float(config.get('transducer_offset_psi', 0.0))
+        # Optional two-band nonlinear correction model (fit on static calibration data).
+        # The model describes sensor error as:
+        #   error_psi = slope * pressure_psi + intercept
+        # and we apply correction as:
+        #   corrected_psi = measured_psi - error_psi
+        nonlinear_cfg = config.get('transducer_nonlinear_correction', {}) or {}
+        error_model_cfg = config.get('transducer_error_model', {}) or {}
+        self._error_model: Optional[Dict[str, Any]] = None
+        if isinstance(error_model_cfg, dict) and error_model_cfg.get('type'):
+            self._error_model = error_model_cfg
+        self._nonlinear_breakpoint_psi = float(nonlinear_cfg.get('breakpoint_psi', 5.0))
+        self._nonlinear_low_slope = float(nonlinear_cfg.get('low_slope_error_per_psi', 0.0))
+        self._nonlinear_low_intercept = float(nonlinear_cfg.get('low_intercept_error_psi', 0.0))
+        self._nonlinear_high_slope = float(nonlinear_cfg.get('high_slope_error_per_psi', 0.0))
+        self._nonlinear_high_intercept = float(nonlinear_cfg.get('high_intercept_error_psi', 0.0))
+        if self._error_model is None and nonlinear_cfg:
+            self._error_model = build_legacy_two_band_model(
+                breakpoint_psi=self._nonlinear_breakpoint_psi,
+                low_slope_error_per_psi=self._nonlinear_low_slope,
+                low_intercept_error_psi=self._nonlinear_low_intercept,
+                high_slope_error_per_psi=self._nonlinear_high_slope,
+                high_intercept_error_psi=self._nonlinear_high_intercept,
+            )
 
         self.switch_no_dio = config.get('switch_no_dio')
         self.switch_nc_dio = config.get('switch_nc_dio')
@@ -364,6 +389,10 @@ class LabJackController:
         self._ema_pressure = alpha * pressure + (1.0 - alpha) * self._ema_pressure
         return self._ema_pressure
 
+    def _apply_nonlinear_correction(self, pressure_psi: float) -> float:
+        """Apply optional two-band correction to pressure."""
+        return apply_error_model(pressure_psi, self._error_model)
+
     def read_transducer(self) -> Optional[TransducerReading]:
         """Read pressure from the ratiometric transducer.
 
@@ -380,7 +409,8 @@ class LabJackController:
                 if pressure_range > 0
                 else 0.0
             )
-            pressure_raw = self._sim_pressure + self.pressure_offset
+            pressure_linear = self._sim_pressure + self.pressure_offset
+            pressure_raw = self._apply_nonlinear_correction(pressure_linear)
             pressure_filtered = self._apply_ema(pressure_raw)
             return TransducerReading(
                 voltage=voltage,
@@ -407,7 +437,8 @@ class LabJackController:
                 pressure = (voltage - self.voltage_min) / voltage_range * pressure_range + self.pressure_min
             else:
                 pressure = self.pressure_min
-            pressure_raw = pressure + self.pressure_offset
+            pressure_linear = pressure + self.pressure_offset
+            pressure_raw = self._apply_nonlinear_correction(pressure_linear)
             pressure_filtered = self._apply_ema(pressure_raw)
             return TransducerReading(
                 voltage=voltage,

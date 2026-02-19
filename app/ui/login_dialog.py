@@ -8,6 +8,7 @@ Based on the Functional Stand Login Dialog.
 import sys
 import os
 import logging
+import re
 from typing import Dict, Any, Optional, Tuple
 
 from PyQt6.QtWidgets import (
@@ -32,6 +33,7 @@ from app.services import run_async
 logger = logging.getLogger(__name__)
 
 VALIDATION_DEBOUNCE_MS = 300
+SHOP_ORDER_MIN_VALIDATE_LEN = 4
 
 
 class LoginDialog(QDialog):
@@ -474,6 +476,17 @@ class LoginDialog(QDialog):
             self.status_label.setText("")
             self.work_order_details = None
             self._manual_entry_mode = False
+            self._update_login_button_state()
+            return
+
+        if len(shop_order) < SHOP_ORDER_MIN_VALIDATE_LEN or not re.fullmatch(r'[A-Za-z0-9_-]+', shop_order):
+            # Avoid hammering DB/logs while operators are still typing or scanner payload is partial.
+            self._set_shop_order_validity(None)
+            self.work_order_details = None
+            self._manual_entry_mode = False
+            self.status_label.setText('Enter full Shop Order to validate.')
+            self.status_label.setStyleSheet("color: #4b5563;")
+            self._clear_details()
             self._update_login_button_state()
             return
 

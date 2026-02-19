@@ -18,10 +18,12 @@ from app.services.measurement_source import (
     get_measurement_settings,
     select_main_pressure_abs_psi,
 )
+from app.services.pressure_domain import to_absolute_pressure
 from app.services.ptp_service import TestSetup, convert_pressure
 from app.services.sweep_primitives import (
     DebounceState,
     EdgeDetection,
+    SweepPassOutcome,
     SweepResult,
     observe_debounced_transition,
     resolve_sweep_result,
@@ -282,12 +284,14 @@ class PrecisionPhaseRunner:
             target_back,
             self._ctx._slow_edge_rate_psi,
         )
-        result = self._ctx._run_sweep_pass(
+        outcome = self._ctx._run_sweep_pass(
             target_out,
             target_back,
             activation_direction,
             self._ctx._slow_edge_rate_psi,
         )
+        result = outcome.result
+        self._ctx._last_precision_missing_edge = outcome.missing_edge
 
         if self._ctx._cancel_event.is_set():
             return None
@@ -494,12 +498,22 @@ class TestExecutor:
             0.02,
             convert_pressure(deactivation_margin_torr, 'Torr', 'PSI'),
         )
+        return_overshoot_torr = control_cfg.edge_detection.precision_return_overshoot_torr
+        self._precision_return_overshoot_psi = max(
+            0.0,
+            convert_pressure(return_overshoot_torr, 'Torr', 'PSI'),
+        )
+        self._precision_post_target_grace_s = max(
+            0.0,
+            control_cfg.edge_detection.precision_post_target_grace_sec,
+        )
         self._stable_count = control_cfg.debounce.stable_sample_count
         self._min_edge_interval_s = control_cfg.debounce.min_edge_interval_ms / 1000.0
         self._cycle_activation_samples: list[float] = []
         self._cycle_deactivation_samples: list[float] = []
         self._cycle_debounce_state = DebounceState()
         self._run_atmosphere_psi: Optional[float] = None
+        self._last_precision_missing_edge: Optional[str] = None
         self._cycle_phase_runner = CyclePhaseRunner(self)
         self._precision_phase_runner = PrecisionPhaseRunner(self)
 
@@ -547,9 +561,9 @@ class TestExecutor:
             rate_psi_per_sec=rate_psi_per_sec,
             fail_on_rate_error=False,
         )
-        if result is None:
+        if result.result is None:
             return None
-        return (result.activation_psi, result.deactivation_psi)
+        return (result.result.activation_psi, result.result.deactivation_psi)
 
     # ------------------------------------------------------------------
     # Internal: main loop
@@ -605,15 +619,22 @@ class TestExecutor:
             # ---- Precision test phase ----
             # Skip atmosphere gate since we're already at deactivation after cycling
             self._emit_event('precision_started', sweep_mode=sweep_mode)
+            self._last_precision_missing_edge = None
             result = self._run_precision_sweep(sweep_mode, bounds, skip_atmosphere_gate=True)
 
             if self._cancel_and_emit():
                 return
 
             if result is None:
+                if self._last_precision_missing_edge == 'first':
+                    failure_message = 'Activation edge not detected during precision out-sweep'
+                elif self._last_precision_missing_edge == 'second':
+                    failure_message = 'Deactivation edge not detected during precision return-sweep'
+                else:
+                    failure_message = 'No edges detected during precision sweep'
                 self._fail(
                     TestFailureCode.EDGE_NOT_FOUND,
-                    'No edges detected during precision sweep',
+                    failure_message,
                 )
                 return
 
@@ -971,7 +992,7 @@ class TestExecutor:
         target_back: float,
         direction: int,
         rate_psi_per_sec: float,
-    ) -> Optional[SweepResult]:
+    ) -> SweepPassOutcome:
         """Single sweep pass: out to edge, then back to edge."""
 
         logger.info(
@@ -997,37 +1018,51 @@ class TestExecutor:
         direction: int,
         rate_psi_per_sec: float,
         fail_on_rate_error: bool,
-    ) -> Optional[SweepResult]:
+    ) -> SweepPassOutcome:
         if not self._port.alicat.set_ramp_rate(rate_psi_per_sec):
             if fail_on_rate_error:
                 self._fail(TestFailureCode.RAMP_RATE_FAILURE, f'Failed to set sweep ramp rate for {self._port_id}')
-            return None
+            return SweepPassOutcome(result=None, missing_edge='rate_error')
 
         # First edge is activation (sweeping in activation direction)
         edge_out = self._sweep_to_edge(target_out, direction, edge_type='activation')
         if self._cancel_event.is_set():
-            return None
+            return SweepPassOutcome(result=None, missing_edge='cancelled')
         if edge_out is None:
             logger.warning(
                 '%s: No first edge detected in precision out-sweep target=%.3f',
                 self._port_id,
                 target_out,
             )
-            return None
+            return SweepPassOutcome(result=None, missing_edge='first')
 
         # Second edge is deactivation (sweeping in opposite direction)
-        edge_back = self._sweep_to_edge(target_back, -direction, edge_type='deactivation')
+        hw_min_psi, hw_max_psi = self._resolve_hardware_limits_test_reference()
+        return_target = target_back + (self._precision_return_overshoot_psi * (-direction))
+        return_target = min(hw_max_psi, max(hw_min_psi, return_target))
+        if not math.isclose(return_target, target_back, abs_tol=1e-6):
+            logger.debug(
+                '%s: Precision return target expanded %.4f -> %.4f PSI (overshoot=%.4f)',
+                self._port_id,
+                target_back,
+                return_target,
+                self._precision_return_overshoot_psi,
+            )
+        edge_back = self._sweep_to_edge(return_target, -direction, edge_type='deactivation')
         if self._cancel_event.is_set():
-            return None
+            return SweepPassOutcome(result=None, missing_edge='cancelled')
         if edge_back is None:
             logger.warning(
                 '%s: Second edge not detected in precision return-sweep target=%.3f',
                 self._port_id,
-                target_back,
+                return_target,
             )
-            return None
+            return SweepPassOutcome(result=None, missing_edge='second')
 
-        return resolve_sweep_result(edge_out, edge_back)
+        return SweepPassOutcome(
+            result=resolve_sweep_result(edge_out, edge_back),
+            missing_edge=None,
+        )
 
     def _sweep_to_edge(
         self,
@@ -1069,6 +1104,7 @@ class TestExecutor:
         start = time.perf_counter()
         target_reached_since: Optional[float] = None
         settle_window_s = max(0.08, self._stable_count * 0.02)
+        target_grace_s = settle_window_s + self._precision_post_target_grace_s
 
         while time.perf_counter() - start < dynamic_timeout_s:
             if self._cancel_event.is_set():
@@ -1122,12 +1158,13 @@ class TestExecutor:
                 now = time.perf_counter()
                 if target_reached_since is None:
                     target_reached_since = now
-                elif now - target_reached_since >= settle_window_s:
+                elif now - target_reached_since >= target_grace_s:
                     logger.debug(
-                        '%s: Sweep target reached without stable edge target=%.4f dir=%s',
+                        '%s: Sweep target reached without stable edge target=%.4f dir=%s hold=%.3fs',
                         self._port_id,
                         target_psi,
                         'increasing' if direction > 0 else 'decreasing',
+                        now - target_reached_since,
                     )
                     break
             else:
@@ -1392,9 +1429,7 @@ class TestExecutor:
     def _to_absolute(self, value_psi: float) -> float:
         """Convert a PSI value to absolute if PTP is gauge-referenced."""
         pressure_ref = self._test_setup.pressure_reference if self._test_setup else None
-        if str(pressure_ref or '').strip().lower() == 'gauge':
-            return value_psi + self._get_barometric_psi(self._port_id)
-        return value_psi
+        return to_absolute_pressure(value_psi, pressure_ref, self._get_barometric_psi(self._port_id))
 
     @staticmethod
     def _effective_switch_state(switch_state: Any) -> bool:

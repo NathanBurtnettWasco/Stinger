@@ -36,9 +36,27 @@ def validate_shop_order(shop_order: str) -> Optional[Dict[str, Any]]:
     
     try:
         with session_scope() as session:
-            record = session.query(OrderCalibrationMaster).filter_by(
-                ShopOrder=shop_order.strip()
-            ).one_or_none()
+            shop_order_clean = shop_order.strip()
+            records = session.query(OrderCalibrationMaster).filter_by(
+                ShopOrder=shop_order_clean
+            ).all()
+            record = None
+            if records:
+                if len(records) > 1:
+                    record = max(
+                        records,
+                        key=lambda item: (
+                            item.CalibrationDate or datetime.min,
+                            item.StartTime or datetime.min,
+                        ),
+                    )
+                    logger.warning(
+                        'Shop order lookup returned %d rows for %s; using the latest record',
+                        len(records),
+                        shop_order_clean,
+                    )
+                else:
+                    record = records[0]
             
             if record:
                 # Convert to dictionary, stripping fixed-width padding

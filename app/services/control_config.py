@@ -32,6 +32,8 @@ class EdgeDetectionConfig:
     precision_close_limit_offset_torr: float
     precision_prepass_nudge_torr: float
     precision_deactivation_margin_torr: float
+    precision_post_target_grace_sec: float
+    precision_return_overshoot_torr: float
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,8 @@ def parse_control_config(config: dict[str, Any]) -> ControlConfig:
             'precision_close_limit_offset_torr',
             'precision_prepass_nudge_torr',
             'precision_deactivation_margin_torr',
+            'precision_post_target_grace_sec',
+            'precision_return_overshoot_torr',
         },
     )
     _require_known_keys('debounce', debounce, {'stable_sample_count', 'min_edge_interval_ms'})
@@ -106,6 +110,8 @@ def parse_control_config(config: dict[str, Any]) -> ControlConfig:
             precision_close_limit_offset_torr=float(edge.get('precision_close_limit_offset_torr', 40.0)),
             precision_prepass_nudge_torr=float(edge.get('precision_prepass_nudge_torr', 20.0)),
             precision_deactivation_margin_torr=float(edge.get('precision_deactivation_margin_torr', 15.0)),
+            precision_post_target_grace_sec=float(edge.get('precision_post_target_grace_sec', 0.35)),
+            precision_return_overshoot_torr=float(edge.get('precision_return_overshoot_torr', 12.0)),
         ),
         debounce=DebounceConfig(
             stable_sample_count=int(debounce.get('stable_sample_count', 3)),

@@ -162,29 +162,7 @@ class Port:
     
     def read_all(self) -> PortReading:
         """Read all sensors for this port."""
-        import time
-        timestamp = time.time()
-        
-        reading = PortReading(
-            transducer=self.daq.read_transducer(),
-            switch=self.daq.read_switch_state(),
-            alicat=self.alicat.read_status(),
-            dio=self.daq.read_dio_values(max_dio=22),
-            timestamp=timestamp
-        )
-
-        # Convert transducer absolute -> gauge if configured
-        if reading.transducer and reading.alicat:
-            if getattr(self.daq, "pressure_reference", "absolute") == "gauge":
-                baro = reading.alicat.barometric_pressure
-                if baro is not None:
-                    reading.transducer.pressure = reading.transducer.pressure - baro
-                    reading.transducer.pressure_reference = "gauge"
-        
-        # Check for edge events
-        self._check_for_edge(reading)
-        
-        return reading
+        return self._read(use_cached_alicat=False)
     
     def refresh_alicat(self) -> None:
         """Update the cached Alicat reading (slow serial I/O)."""
@@ -196,17 +174,28 @@ class Port:
         Reads transducer, switch state, and DIO from the LabJack but uses
         the most recently cached Alicat reading instead of blocking on serial.
         """
+        return self._read(use_cached_alicat=True)
+
+    def _read(self, use_cached_alicat: bool) -> PortReading:
+        """Shared read path used by both full and fast reads."""
         import time
+
         timestamp = time.time()
+        alicat_reading = self._cached_alicat if use_cached_alicat else self.alicat.read_status()
 
         reading = PortReading(
             transducer=self.daq.read_transducer(),
             switch=self.daq.read_switch_state(),
-            alicat=self._cached_alicat,
+            alicat=alicat_reading,
             dio=self.daq.read_dio_values(max_dio=22),
             timestamp=timestamp,
         )
+        self._normalize_transducer_reference(reading)
+        self._check_for_edge(reading)
+        return reading
 
+    def _normalize_transducer_reference(self, reading: PortReading) -> None:
+        """Convert transducer absolute to gauge when LabJack is gauge-referenced."""
         # Convert transducer absolute -> gauge if configured
         if reading.transducer and reading.alicat:
             if getattr(self.daq, 'pressure_reference', 'absolute') == 'gauge':
@@ -214,11 +203,6 @@ class Port:
                 if baro is not None:
                     reading.transducer.pressure = reading.transducer.pressure - baro
                     reading.transducer.pressure_reference = 'gauge'
-
-        # Check for edge events
-        self._check_for_edge(reading)
-
-        return reading
 
     def _check_for_edge(self, reading: PortReading) -> None:
         """Check if a switch edge occurred and record it."""
@@ -230,7 +214,9 @@ class Port:
         
         if previous is not None and current.switch_activated != previous.switch_activated:
             # Edge detected!
-            pressure = reading.transducer.pressure if reading.transducer else 0.0
+            pressure = self._alicat_abs_pressure_psi(reading.alicat)
+            if pressure is None:
+                pressure = 0.0
             
             # Determine direction based on pressure change
             # (Would need to track pressure history for accurate direction)
@@ -255,6 +241,19 @@ class Port:
                     logger.error(f"Edge callback error: {e}")
         
         self._last_switch_state = current
+
+    @staticmethod
+    def _alicat_abs_pressure_psi(reading: Optional[AlicatReading]) -> Optional[float]:
+        if reading is None:
+            return None
+        if reading.pressure is not None:
+            return float(reading.pressure)
+        if reading.gauge_pressure is None:
+            return None
+        barometric = reading.barometric_pressure
+        if barometric is None:
+            barometric = _ATMOSPHERE_PSI
+        return float(reading.gauge_pressure + barometric)
     
     def register_edge_callback(self, callback: Callable[[EdgeEvent], None]) -> None:
         """Register a callback to be called when an edge is detected."""
@@ -289,23 +288,23 @@ class Port:
                 "safe_vacuum_switch_threshold_psi", 2.0
             )
             if threshold_psi is not None:
-                reading = self.daq.read_transducer()
-                if reading is None:
+                alicat_reading = self.alicat.read_status() or self._cached_alicat
+                pressure_abs_psi = self._alicat_abs_pressure_psi(alicat_reading)
+                if pressure_abs_psi is None:
                     logger.warning(
-                        "%s: Refusing vacuum - no transducer reading (pump protection)",
+                        "%s: Refusing vacuum - no Alicat pressure reading (pump protection)",
                         self.port_id.value,
                     )
                     return False
-                ref = (reading.pressure_reference or "gauge").lower()
-                if ref == "gauge":
-                    safe = reading.pressure <= threshold_psi
-                else:
-                    safe = reading.pressure <= _ATMOSPHERE_PSI + threshold_psi
+                barometric = _ATMOSPHERE_PSI
+                if alicat_reading and alicat_reading.barometric_pressure is not None:
+                    barometric = float(alicat_reading.barometric_pressure)
+                safe = pressure_abs_psi <= barometric + threshold_psi
                 if not safe:
                     logger.warning(
                         "%s: Refusing vacuum - port pressure %.2f exceeds safe threshold %.2f psi (pump protection)",
                         self.port_id.value,
-                        reading.pressure,
+                        pressure_abs_psi,
                         threshold_psi,
                     )
                     return False
@@ -358,11 +357,19 @@ class PortManager:
         self.ports: Dict[PortId, Port] = {}
         self._polling = False
         self._poll_thread: Optional[threading.Thread] = None
-        self._poll_interval_ms = config.get('timing', {}).get('hardware_poll_interval_ms', 10)
-        self._alicat_poll_divisor = max(1, int(
-            config.get('timing', {}).get('alicat_poll_divisor', 10)
-        ))
+        timing_cfg = config.get('timing', {})
+        self._poll_interval_ms = timing_cfg.get('hardware_poll_interval_ms', 10)
+        legacy_divisor = max(1, int(timing_cfg.get('alicat_poll_divisor', 10)))
+        self._alicat_poll_divisor_normal = max(
+            1, int(timing_cfg.get('alicat_poll_divisor_normal', legacy_divisor))
+        )
+        self._alicat_poll_divisor_precision = max(
+            1, int(timing_cfg.get('alicat_poll_divisor_precision', self._alicat_poll_divisor_normal))
+        )
         self._poll_callback: Optional[Callable[[Dict[PortId, PortReading]], None]] = None
+        self._poll_policy_lock = threading.Lock()
+        self._alicat_poll_divisors: Dict[PortId, int] = {}
+        self._alicat_refresh_countdown: Dict[PortId, int] = {}
 
         logger.info("PortManager initialized")
     
@@ -415,6 +422,10 @@ class PortManager:
             self.ports[PortId.PORT_B] = port_b
         
         logger.info(f"PortManager: {len(self.ports)} ports initialized")
+        with self._poll_policy_lock:
+            for port_id in self.ports.keys():
+                self._alicat_poll_divisors[port_id] = self._alicat_poll_divisor_normal
+                self._alicat_refresh_countdown[port_id] = 0
         return success
     
     def connect_all(self) -> bool:
@@ -475,6 +486,59 @@ class PortManager:
     def set_poll_callback(self, callback: Callable[[Dict[PortId, PortReading]], None]) -> None:
         """Set callback function to be called with readings on each poll."""
         self._poll_callback = callback
+
+    def set_alicat_poll_divisor(self, port_id: PortId | str, divisor: int) -> bool:
+        """Set Alicat poll divisor for a single port at runtime."""
+        normalized = self._normalize_port_id(port_id)
+        if normalized is None:
+            return False
+        divisor_val = max(1, int(divisor))
+        with self._poll_policy_lock:
+            self._alicat_poll_divisors[normalized] = divisor_val
+            # Apply speed increases immediately.
+            self._alicat_refresh_countdown[normalized] = 0
+        logger.info(
+            'PortManager: %s Alicat poll divisor set to %d',
+            normalized.value,
+            divisor_val,
+        )
+        return True
+
+    def set_alicat_poll_profile(self, precision_port: Optional[PortId | str]) -> None:
+        """
+        Apply polling profile:
+        - precision port -> precision divisor
+        - all other ports -> normal divisor
+        """
+        precision_id = self._normalize_port_id(precision_port) if precision_port is not None else None
+        with self._poll_policy_lock:
+            for port_id in self.ports.keys():
+                if precision_id is not None and port_id == precision_id:
+                    self._alicat_poll_divisors[port_id] = self._alicat_poll_divisor_precision
+                else:
+                    self._alicat_poll_divisors[port_id] = self._alicat_poll_divisor_normal
+                # Force immediate refresh after profile change.
+                self._alicat_refresh_countdown[port_id] = 0
+        if precision_id is None:
+            logger.info(
+                'PortManager: Alicat poll profile normal (divisor=%d)',
+                self._alicat_poll_divisor_normal,
+            )
+        else:
+            logger.info(
+                'PortManager: Alicat poll profile precision owner=%s (precision=%d normal=%d)',
+                precision_id.value,
+                self._alicat_poll_divisor_precision,
+                self._alicat_poll_divisor_normal,
+            )
+
+    def get_alicat_poll_divisors(self) -> Dict[str, int]:
+        """Return current per-port Alicat poll divisors."""
+        with self._poll_policy_lock:
+            return {
+                port_id.value: int(self._alicat_poll_divisors.get(port_id, self._alicat_poll_divisor_normal))
+                for port_id in self.ports.keys()
+            }
     
     def start_polling(self) -> bool:
         """Start hardware polling loop in background thread."""
@@ -507,27 +571,39 @@ class PortManager:
         """Background thread loop that polls hardware and calls callback.
 
         LabJack reads (transducer + switch + DIO) run every cycle.  Alicat
-        serial reads are performed every Nth cycle (configured by
-        ``alicat_poll_divisor``) to avoid blocking the fast loop.
+        serial reads are performed per-port based on runtime divisors.
         """
         import time
         interval_s = self._poll_interval_ms / 1000.0
-        cycle = 0
 
         # Seed the Alicat cache on the first cycle so consumers always have data
-        for port in self.ports.values():
+        for port_id, port in self.ports.items():
             try:
                 port.refresh_alicat()
             except Exception:
                 pass
+            with self._poll_policy_lock:
+                divisor = int(self._alicat_poll_divisors.get(port_id, self._alicat_poll_divisor_normal))
+                self._alicat_refresh_countdown[port_id] = max(0, divisor - 1)
 
         while self._polling:
             start_time = time.perf_counter()
 
             try:
-                # Refresh Alicat cache every Nth cycle
-                if cycle % self._alicat_poll_divisor == 0:
-                    for port in self.ports.values():
+                # Refresh Alicat cache by per-port countdown
+                for port_id, port in self.ports.items():
+                    should_refresh = False
+                    with self._poll_policy_lock:
+                        divisor = int(
+                            self._alicat_poll_divisors.get(port_id, self._alicat_poll_divisor_normal)
+                        )
+                        remaining = int(self._alicat_refresh_countdown.get(port_id, 0))
+                        if remaining <= 0:
+                            should_refresh = True
+                            self._alicat_refresh_countdown[port_id] = max(0, divisor - 1)
+                        else:
+                            self._alicat_refresh_countdown[port_id] = remaining - 1
+                    if should_refresh:
                         port.refresh_alicat()
 
                 # Fast path: LabJack-only reads + cached Alicat
@@ -540,11 +616,20 @@ class PortManager:
             except Exception as e:
                 logger.error(f"PortManager: Polling error: {e}")
 
-            cycle += 1
-
             # Calculate sleep time accounting for execution time to maintain consistent interval
             elapsed = time.perf_counter() - start_time
             sleep_time = max(0, interval_s - elapsed)
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+    @staticmethod
+    def _normalize_port_id(port_id: PortId | str | None) -> Optional[PortId]:
+        if port_id is None:
+            return None
+        if isinstance(port_id, PortId):
+            return port_id
+        try:
+            return PortId(str(port_id))
+        except ValueError:
+            return None

@@ -13,6 +13,12 @@ class SweepResult:
 
 
 @dataclass(frozen=True)
+class SweepPassOutcome:
+    result: Optional[SweepResult]
+    missing_edge: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class EdgeDetection:
     pressure_psi: float
     activated: bool
