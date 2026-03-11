@@ -137,6 +137,45 @@ STYLES = {
         f"}}"
     ),
 
+    "topbar_meta_chip": (
+        f"color: {COLORS['text_primary']}; "
+        f"background-color: {COLORS['bg_surface_1']}; "
+        f"border: 1px solid {COLORS['border_subtle']}; "
+        f"border-radius: {RADIUS['medium']}; "
+        f"padding: 2px 8px; "
+        f"font-weight: bold;"
+    ),
+
+    "compact_panel_shell": (
+        f"background-color: {COLORS['bg_surface_1']}; "
+        f"border: 1px solid {COLORS['border_subtle']}; "
+        f"border-radius: {RADIUS['medium']};"
+    ),
+
+    "serial_group_shell": (
+        "QFrame { "
+        f"background-color: {COLORS['bg_surface_2']}; "
+        f"border: 1px solid {COLORS['border_subtle']}; "
+        f"border-radius: {RADIUS['medium']}; "
+        "padding: 4px 8px; "
+        "}"
+    ),
+
+    "serial_stepper_button": (
+        "QPushButton { "
+        f"background-color: {COLORS['button_hover']}; "
+        f"color: {COLORS['text_primary']}; "
+        f"border: 1px solid {COLORS['border_subtle']}; "
+        f"border-radius: {RADIUS['medium']}; "
+        "}"
+        "QPushButton:hover { "
+        f"background-color: {COLORS['bg_surface_3']}; "
+        "}"
+        "QPushButton:pressed { "
+        f"background-color: {COLORS['button_active']}; "
+        "}"
+    ),
+
     # Pill-shaped progress bar (flat, no gradient)
     "progress_bar": (
         f"QProgressBar {{ "
@@ -291,4 +330,21 @@ def status_badge_style(level: str) -> str:
         "color: white; font-weight: bold;"
         f" background-color: {bg};"
         " border-radius: 10px; padding: 4px 8px;"
+    )
+
+
+def status_tool_button_style(color: str) -> str:
+    """Build stylesheet for compact status tool button."""
+    return (
+        "QToolButton {"
+        f" background-color: {COLORS['bg_surface_1']};"
+        f" color: {color};"
+        f" border: 1px solid {color};"
+        f" border-radius: {RADIUS['medium']};"
+        " padding: 7px 12px;"
+        " font-weight: bold;"
+        " font-size: 11px;"
+        " min-width: 118px;"
+        " text-align: center; }"
+        f"QToolButton:hover {{ border: 1px solid {color}; background-color: {COLORS['bg_surface_0']}; }}"
     )

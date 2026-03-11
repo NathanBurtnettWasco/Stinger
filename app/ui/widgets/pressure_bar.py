@@ -28,6 +28,7 @@ class PressureBarWidget(QWidget):
         self._estimated_deactivation: Optional[float] = None
         self._estimated_sample_count: int = 0
         self._units_label = "PSI"
+        self._axis_side = 'right'
 
         self._show_atmosphere_reference = True
         self._show_acceptance_bands = True
@@ -38,6 +39,14 @@ class PressureBarWidget(QWidget):
     def set_units_label(self, units: str) -> None:
         """Set the units label for the Y-axis."""
         self._units_label = units
+        self.update()
+
+    def set_axis_side(self, side: str) -> None:
+        """Set axis side: 'left' or 'right'."""
+        side_normalized = str(side or '').strip().lower()
+        if side_normalized not in {'left', 'right'}:
+            return
+        self._axis_side = side_normalized
         self.update()
 
     def set_scale(self, min_psi: float, max_psi: float) -> None:
@@ -115,8 +124,11 @@ class PressureBarWidget(QWidget):
 
         # Increased axis margin for better label visibility
         axis_margin = 60
-        top_margin = 18  # Space for units label (increased to prevent clipping)
-        rect = self.rect().adjusted(8, top_margin, -8 - axis_margin, -8)
+        top_margin = 26  # Extra room so units label stays above top tick labels
+        if self._axis_side == 'left':
+            rect = self.rect().adjusted(8 + axis_margin, top_margin, -8, -8)
+        else:
+            rect = self.rect().adjusted(8, top_margin, -8 - axis_margin, -8)
         top = rect.top()
         bottom = rect.bottom()
         
@@ -168,13 +180,13 @@ class PressureBarWidget(QWidget):
             self._draw_estimated_points(painter, rect)
             if self._measured_activation is not None:
                 self._draw_measured_point(
-                    painter, rect, self._measured_activation, 
-                    QColor(37, 99, 235), "ACT", marker_shape='diamond'
+                    painter, rect, self._measured_activation,
+                    QColor(37, 99, 235), "ACT", marker_shape='diamond', side='left'
                 )
             if self._measured_deactivation is not None:
                 self._draw_measured_point(
                     painter, rect, self._measured_deactivation,
-                    QColor(255, 140, 0), "DEACT", marker_shape='circle'  # Orange for better colorblind distinction
+                    QColor(255, 140, 0), "DEACT", marker_shape='circle', side='right'
                 )
 
         # Current pressure marker as pointer with glow
@@ -261,10 +273,13 @@ class PressureBarWidget(QWidget):
         painter.setPen(QPen(QColor(55, 65, 81), 1))
         font = QFont("Arial", 12, QFont.Weight.Bold)
         painter.setFont(font)
-        # Position label at top of rect, accounting for font metrics to prevent clipping
+        # Keep units above major tick labels to avoid overlap.
         font_metrics = painter.fontMetrics()
-        units_y = top + font_metrics.ascent()
-        painter.drawText(rect.right() + 12, units_y, self._units_label)
+        units_y = top - 6
+        if units_y < font_metrics.ascent():
+            units_y = font_metrics.ascent()
+        text_x = rect.right() + 12 if self._axis_side == 'right' else rect.left() - 12 - font_metrics.horizontalAdvance(self._units_label)
+        painter.drawText(text_x, units_y, self._units_label)
         
         # Major ticks
         major_ticks = 10
@@ -277,13 +292,20 @@ class PressureBarWidget(QWidget):
             
             # Major tick
             painter.setPen(QPen(QColor(156, 163, 175), 2))
-            painter.drawLine(rect.right(), y, rect.right() + 8, y)
+            if self._axis_side == 'right':
+                painter.drawLine(rect.right(), y, rect.right() + 8, y)
+            else:
+                painter.drawLine(rect.left(), y, rect.left() - 8, y)
             
             # Label (right-aligned) - darker for better contrast
             painter.setPen(QPen(QColor(55, 65, 81), 1))
             text = f"{psi:.1f}" if (self._max_psi - self._min_psi) < 10 else f"{psi:.0f}"
             text_rect = painter.fontMetrics().boundingRect(text)
-            painter.drawText(rect.right() + 12, y + text_rect.height() // 3, text)
+            if self._axis_side == 'right':
+                label_x = rect.right() + 12
+            else:
+                label_x = rect.left() - 12 - text_rect.width()
+            painter.drawText(label_x, y + text_rect.height() // 3, text)
         
         # Minor ticks
         minor_ticks = major_ticks * 5
@@ -294,74 +316,100 @@ class PressureBarWidget(QWidget):
             y = int(bottom - ratio * (bottom - top))
             
             painter.setPen(QPen(QColor(180, 180, 180), 1))
-            painter.drawLine(rect.right(), y, rect.right() + 4, y)
+            if self._axis_side == 'right':
+                painter.drawLine(rect.right(), y, rect.right() + 4, y)
+            else:
+                painter.drawLine(rect.left(), y, rect.left() - 4, y)
     
     def _draw_measured_point(
-        self, painter: QPainter, rect, pressure: float, color: QColor, label: str, marker_shape: str = 'diamond'
+        self, painter: QPainter, rect, pressure: float, color: QColor, label: str,
+        marker_shape: str = 'diamond', side: str = 'left'
     ) -> None:
         """Draw a measured point with marker and label.
-        
+
         Args:
             marker_shape: 'diamond' for activation, 'circle' for deactivation (colorblind-friendly)
+            side: 'left' pins the marker/label to the left edge; 'right' mirrors them
+                  to the right edge so that two nearby readings don't overlap.
         """
         top = rect.top()
         bottom = rect.bottom()
         y = self._pressure_to_y(pressure, top, bottom)
-        
-        # Draw horizontal line - thinner for precision
+
+        # Full-width horizontal reference line
         line_color = QColor(color)
         line_color.setAlpha(200)
         painter.setPen(QPen(line_color, 1.5))
         painter.drawLine(rect.left() + 4, y, rect.right() - 4, y)
-        
-        # Draw marker on left edge - different shapes for colorblind accessibility
+
         marker_size = 6
-        marker_x = rect.left() - 2 + marker_size
-        
-        if marker_shape == 'circle':
-            # Circle marker for deactivation (orange)
-            painter.setBrush(color)
-            painter.setPen(QPen(QColor(255, 255, 255), 1))
-            painter.drawEllipse(
-                int(marker_x - marker_size),
-                int(y - marker_size),
-                marker_size * 2,
-                marker_size * 2
-            )
+        painter.setBrush(color)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+
+        if side == 'right':
+            # Mirror marker to the right edge
+            marker_cx = rect.right() + 2 - marker_size  # horizontal centre of marker
+            if marker_shape == 'circle':
+                painter.drawEllipse(
+                    int(marker_cx - marker_size),
+                    int(y - marker_size),
+                    marker_size * 2,
+                    marker_size * 2,
+                )
+            else:
+                diamond = QPolygonF([
+                    QPointF(rect.right() + 2, y),
+                    QPointF(marker_cx, y - marker_size),
+                    QPointF(rect.right() + 2 - marker_size * 2, y),
+                    QPointF(marker_cx, y + marker_size),
+                ])
+                painter.drawPolygon(diamond)
+
+            # Label right-aligned inside the bar
+            painter.setFont(QFont('Arial', 8, QFont.Weight.Bold))
+            painter.setPen(QPen(QColor(26, 26, 46), 1))
+            value_text = f'{pressure:.2f}'
+            text_width = painter.fontMetrics().horizontalAdvance(value_text)
+            label_x = rect.right() - text_width - 8
+            label_y = y - 12 if y > rect.top() + 20 else y + 20
+
+            bg_rect = painter.fontMetrics().boundingRect(value_text)
+            bg_rect.moveTopLeft(QPoint(int(label_x - 2), int(label_y - bg_rect.height() + 2)))
+            bg_rect.adjust(-2, -1, 2, 1)
+            painter.fillRect(bg_rect, QColor(255, 255, 255, 220))
+            painter.drawText(label_x, label_y, value_text)
+
         else:
-            # Diamond marker for activation (blue)
-            diamond = QPolygonF([
-                QPointF(rect.left() - 2, y),
-                QPointF(marker_x, y - marker_size),
-                QPointF(rect.left() - 2 + marker_size * 2, y),
-                QPointF(marker_x, y + marker_size),
-            ])
-            painter.setBrush(color)
-            painter.setPen(QPen(QColor(255, 255, 255), 1))
-            painter.drawPolygon(diamond)
-        
-        # Draw small label with value
-        painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
-        painter.setPen(QPen(QColor(26, 26, 46), 1))
-        value_text = f"{pressure:.2f}"
-        text_width = painter.fontMetrics().horizontalAdvance(value_text)
-        
-        # Position label to avoid overlapping with axis
-        label_x = rect.left() + 8
-        label_y = y - 12 if y > rect.top() + 20 else y + 20
-        
-        # Draw background for label
-        bg_rect = painter.fontMetrics().boundingRect(value_text)
-        bg_rect.moveTopLeft(
-            QPoint(
-                int(label_x - 2),
-                int(label_y - bg_rect.height() + 2),
-            )
-        )
-        bg_rect.adjust(-2, -1, 2, 1)
-        painter.fillRect(bg_rect, QColor(255, 255, 255, 220))
-        
-        painter.drawText(label_x, label_y, value_text)
+            # Original left-edge marker
+            marker_cx = rect.left() - 2 + marker_size
+            if marker_shape == 'circle':
+                painter.drawEllipse(
+                    int(marker_cx - marker_size),
+                    int(y - marker_size),
+                    marker_size * 2,
+                    marker_size * 2,
+                )
+            else:
+                diamond = QPolygonF([
+                    QPointF(rect.left() - 2, y),
+                    QPointF(marker_cx, y - marker_size),
+                    QPointF(rect.left() - 2 + marker_size * 2, y),
+                    QPointF(marker_cx, y + marker_size),
+                ])
+                painter.drawPolygon(diamond)
+
+            # Label left-aligned inside the bar
+            painter.setFont(QFont('Arial', 8, QFont.Weight.Bold))
+            painter.setPen(QPen(QColor(26, 26, 46), 1))
+            value_text = f'{pressure:.2f}'
+            label_x = rect.left() + 8
+            label_y = y - 12 if y > rect.top() + 20 else y + 20
+
+            bg_rect = painter.fontMetrics().boundingRect(value_text)
+            bg_rect.moveTopLeft(QPoint(int(label_x - 2), int(label_y - bg_rect.height() + 2)))
+            bg_rect.adjust(-2, -1, 2, 1)
+            painter.fillRect(bg_rect, QColor(255, 255, 255, 220))
+            painter.drawText(label_x, label_y, value_text)
 
     def _draw_estimated_points(self, painter: QPainter, rect) -> None:
         """Draw semi-transparent estimated lines from cycling samples."""
@@ -375,6 +423,7 @@ class PressureBarWidget(QWidget):
                 rect,
                 self._estimated_activation,
                 QColor(37, 99, 235, alpha),
+                side='left',
             )
         if self._estimated_deactivation is not None:
             self._draw_estimated_line(
@@ -382,13 +431,25 @@ class PressureBarWidget(QWidget):
                 rect,
                 self._estimated_deactivation,
                 QColor(220, 38, 38, alpha),
+                side='right',
             )
 
-    def _draw_estimated_line(self, painter: QPainter, rect, pressure: float, color: QColor) -> None:
+    def _draw_estimated_line(
+        self, painter: QPainter, rect, pressure: float, color: QColor, side: str = 'left'
+    ) -> None:
+        """Draw a dashed estimated line spanning the half of the bar that matches *side*.
+
+        Activation (left) and deactivation (right) are staggered horizontally so
+        their dashed lines don't completely overlap when values are close together.
+        """
         y = self._pressure_to_y(pressure, rect.top(), rect.bottom())
+        mid = rect.left() + rect.width() // 2
         pen = QPen(color, 1.5, Qt.PenStyle.DashLine)
         painter.setPen(pen)
-        painter.drawLine(rect.left() + 4, y, rect.right() - 4, y)
+        if side == 'right':
+            painter.drawLine(mid, y, rect.right() - 4, y)
+        else:
+            painter.drawLine(rect.left() + 4, y, mid, y)
     
     def _draw_pressure_pointer(self, painter: QPainter, rect, pressure: float) -> None:
         """Draw current pressure marker as a thin, precise line with arrow."""

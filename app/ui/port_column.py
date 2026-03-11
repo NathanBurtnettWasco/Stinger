@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 
+from app.ui.styles import STYLES
 from app.ui.widgets import PressureBarWidget, LEDIndicator
 
 
@@ -178,7 +179,7 @@ class PortColumn(QFrame):
 
         # Left zone: Title only
         title_lbl = QLabel(self._title)
-        title_lbl.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title_lbl.setFont(QFont("Segoe UI, Inter, Arial", 16, QFont.Weight.Bold))
         title_lbl.setStyleSheet("color: #1a1a2e;")
         header_layout.addWidget(title_lbl)
 
@@ -198,14 +199,7 @@ class PortColumn(QFrame):
 
         # Right zone: Serial (far right) - pill-shaped container
         serial_group = QFrame()
-        serial_group.setStyleSheet("""
-            QFrame {
-                background-color: #e8eaed;
-                border: 1px solid rgba(0, 0, 0, 0.08);
-                border-radius: 999px;
-                padding: 4px 8px;
-            }
-        """)
+        serial_group.setStyleSheet(STYLES["serial_group_shell"])
         serial_layout = QHBoxLayout(serial_group)
         serial_layout.setContentsMargins(8, 4, 8, 4)
         serial_layout.setSpacing(12)
@@ -213,21 +207,8 @@ class PortColumn(QFrame):
         # Circular buttons
         self._btn_serial_dec = QPushButton("-")
         self._btn_serial_dec.setFixedSize(36, 36)
-        self._btn_serial_dec.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self._btn_serial_dec.setStyleSheet("""
-            QPushButton {
-                background-color: #d1d5db;
-                color: #1a1a2e;
-                border: 1px solid rgba(0, 0, 0, 0.08);
-                border-radius: 18px;
-            }
-            QPushButton:hover {
-                background-color: #b8bcc4;
-            }
-            QPushButton:pressed {
-                background-color: #9ca3af;
-            }
-        """)
+        self._btn_serial_dec.setFont(QFont("Segoe UI, Inter, Arial", 14, QFont.Weight.Bold))
+        self._btn_serial_dec.setStyleSheet(STYLES["serial_stepper_button"])
         serial_layout.addWidget(self._btn_serial_dec)
 
         serial_label = QLabel("SN")
@@ -242,21 +223,8 @@ class PortColumn(QFrame):
 
         self._btn_serial_inc = QPushButton("+")
         self._btn_serial_inc.setFixedSize(36, 36)
-        self._btn_serial_inc.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self._btn_serial_inc.setStyleSheet("""
-            QPushButton {
-                background-color: #d1d5db;
-                color: #1a1a2e;
-                border: 1px solid rgba(0, 0, 0, 0.08);
-                border-radius: 18px;
-            }
-            QPushButton:hover {
-                background-color: #b8bcc4;
-            }
-            QPushButton:pressed {
-                background-color: #9ca3af;
-            }
-        """)
+        self._btn_serial_inc.setFont(QFont("Segoe UI, Inter, Arial", 14, QFont.Weight.Bold))
+        self._btn_serial_inc.setStyleSheet(STYLES["serial_stepper_button"])
         serial_layout.addWidget(self._btn_serial_inc)
 
         self._btn_serial_dec.clicked.connect(self._on_serial_decrement)
@@ -285,7 +253,7 @@ class PortColumn(QFrame):
         pressure_layout.addWidget(self._lbl_pressure)
 
         self._lbl_pressure_unit = QLabel("PSI")
-        self._lbl_pressure_unit.setFont(QFont("Arial", 16))
+        self._lbl_pressure_unit.setFont(QFont("Segoe UI, Inter, Arial", 16))
         self._lbl_pressure_unit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._lbl_pressure_unit.setStyleSheet("color: #6b7280; padding: 2px 0 0 4px;")
         pressure_layout.addWidget(self._lbl_pressure_unit)
@@ -302,38 +270,61 @@ class PortColumn(QFrame):
 
         layout.addWidget(pressure_container)
 
-        # Pressure bar visualization (placeholder)
+        # Pressure bar visualization
         self._pressure_bar = PressureBarWidget()
+        self._pressure_bar.set_axis_side('right' if self._port_id == 'port_a' else 'left')
         self._pressure_bar.setMinimumHeight(340)
         self._pressure_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout.addWidget(self._pressure_bar, 1)
 
         # Action buttons - refined with better styling
         button_frame = QFrame()
         button_frame.setContentsMargins(0, 0, 0, 0)
+        button_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         button_layout = QVBoxLayout(button_frame)
-        button_layout.setContentsMargins(6, 2, 6, 0)
+        button_layout.setContentsMargins(2, 2, 2, 2)
         button_layout.setSpacing(6)
 
-        self._btn_primary = QPushButton("Pressurize")
-        self._btn_primary.setFixedHeight(112)
-        self._btn_primary.setFont(QFont("Arial", 15, QFont.Weight.Bold))
-        button_layout.addWidget(self._btn_primary)
-
         self._btn_cancel = QPushButton("Vent")
-        self._btn_cancel.setFixedHeight(76)
         self._btn_cancel.setEnabled(False)
-        self._btn_cancel.setFont(QFont("Arial", 13, QFont.Weight.Bold))
-        button_layout.addWidget(self._btn_cancel)
+        self._btn_cancel.setFont(QFont("Segoe UI, Inter, Arial", 13, QFont.Weight.Bold))
+
+        self._btn_primary = QPushButton("Pressurize")
+        self._btn_primary.setFont(QFont("Segoe UI, Inter, Arial", 15, QFont.Weight.Bold))
+
+        self._btn_cancel.setMinimumHeight(60)
+        self._btn_primary.setMinimumHeight(120)
+        self._btn_cancel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._btn_primary.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        base_button_width = max(self._btn_primary.sizeHint().width(), self._btn_cancel.sizeHint().width())
+        target_button_width = int(base_button_width * 1.25)
+        self._btn_cancel.setMinimumWidth(target_button_width)
+        self._btn_primary.setMinimumWidth(target_button_width)
+
+        # Keep cancel at the top and make primary occupy the lower 3/4.
+        button_layout.addWidget(self._btn_cancel, 1)
+        button_layout.addWidget(self._btn_primary, 3)
 
         self._btn_primary.clicked.connect(self._on_primary_clicked)
         self._btn_cancel.clicked.connect(self._on_cancel_clicked)
 
-        layout.addWidget(button_frame)
+        # Keep button stack on the outer edge for each port.
+        graph_button_container = QWidget()
+        graph_button_layout = QHBoxLayout(graph_button_container)
+        graph_button_layout.setContentsMargins(0, 0, 0, 0)
+        graph_button_layout.setSpacing(2)
+
+        if self._port_id == "port_a":
+            graph_button_layout.addWidget(button_frame, 1)
+            graph_button_layout.addWidget(self._pressure_bar, 1)
+        else:
+            graph_button_layout.addWidget(self._pressure_bar, 1)
+            graph_button_layout.addWidget(button_frame, 1)
+
+        layout.addWidget(graph_button_container, 1)
         layout.setStretch(0, 0)
         layout.setStretch(1, 0)
-        layout.setStretch(2, 3)
-        layout.setStretch(3, 1)
+        layout.setStretch(2, 1)
         self._apply_cancel_style(False)
 
     def _build_pill(self, title: str, value: str, bold: bool = False, color_hint: Optional[str] = None) -> QFrame:
@@ -366,11 +357,7 @@ class PortColumn(QFrame):
         pill = QFrame()
         pill.setMinimumWidth(280)
         pill.setFixedHeight(54)
-        pill.setStyleSheet(
-            'background-color: rgba(255, 255, 255, 0.75); '
-            'border: 1px solid rgba(0, 0, 0, 0.08); '
-            'border-radius: 8px;'
-        )
+        pill.setStyleSheet(STYLES["compact_panel_shell"])
 
         layout = QVBoxLayout(pill)
         layout.setContentsMargins(10, 6, 10, 6)
@@ -681,7 +668,10 @@ class PortColumn(QFrame):
 
         if final_enabled:
             self._btn_primary.setText(self._primary_requested_label)
-            self._apply_primary_style(self._last_color)
+            # If the state machine left the color as the inactive default, promote
+            # it to green so the button clearly signals it is ready to press.
+            active_color = self._last_color if self._last_color != 'default' else 'green'
+            self._apply_primary_style(active_color)
         else:
             if self._state_machine_enabled and not switch_connected:
                 self._btn_primary.setText('Waiting for Switch...')

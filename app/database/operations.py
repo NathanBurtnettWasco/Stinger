@@ -24,19 +24,48 @@ logger = logging.getLogger(__name__)
 def validate_shop_order(shop_order: str) -> Optional[Dict[str, Any]]:
     """
     Validate a shop order and return work order details.
-    
+
+    Checks custom_work_orders from config first; if not found, queries OrderCalibrationMaster.
+
     Args:
         shop_order: The shop order number to validate.
-        
+
     Returns:
         Dictionary with work order details, or None if not found.
     """
     if not shop_order:
         return None
-    
+
+    shop_order_clean = shop_order.strip()
+
+    # Check config-based custom work orders (e.g. stinger228)
+    try:
+        from app.core.config import load_config
+        config = load_config()
+        custom = config.get("custom_work_orders") or {}
+        if isinstance(custom, dict) and shop_order_clean in custom:
+            c = custom[shop_order_clean]
+            if isinstance(c, dict):
+                part_id = str(c.get("part_id", "")).strip()
+                sequence_id = str(c.get("sequence_id", "")).strip()
+                order_qty = c.get("order_qty", 1)
+                if part_id and sequence_id:
+                    details = {
+                        "ShopOrder": shop_order_clean,
+                        "PartID": part_id,
+                        "SequenceID": sequence_id,
+                        "OrderQTY": order_qty,
+                        "OrderQty": order_qty,
+                        "OperatorID": None,
+                        "EquipmentID": None,
+                    }
+                    logger.info(f"Custom work order validated: {shop_order} -> {part_id}/{sequence_id}")
+                    return details
+    except Exception as e:
+        logger.debug("Custom work order check failed: %s", e)
+
     try:
         with session_scope() as session:
-            shop_order_clean = shop_order.strip()
             records = session.query(OrderCalibrationMaster).filter_by(
                 ShopOrder=shop_order_clean
             ).all()
@@ -131,6 +160,159 @@ def load_test_parameters(part_id: str, sequence_id: str) -> Dict[str, str]:
 
 # Workaround for the import
 import sqlalchemy
+
+
+def insert_test_parameters(part_id: str, sequence_id: str, params: Dict[str, str]) -> bool:
+    """
+    Insert or replace PTP parameters for a part/sequence.
+
+    Deletes any existing rows for (part_id, sequence_id), then inserts the new params.
+    Returns True on success.
+
+    Args:
+        part_id: Part ID.
+        sequence_id: Sequence ID.
+        params: Dictionary mapping ParameterName -> ParameterValue (strings).
+
+    Returns:
+        True if successful, False on error.
+    """
+    if not part_id or not sequence_id or not params:
+        logger.warning("insert_test_parameters: part_id, sequence_id, and params required")
+        return False
+
+    try:
+        part_id_clean = part_id.strip()
+        seq_normalized = str(int(sequence_id.strip()))
+
+        with session_scope() as session:
+            # Delete existing rows for this part/sequence
+            deleted = session.query(ProductTestParameters).filter(
+                ProductTestParameters.PartID == part_id_clean,
+                func.cast(func.rtrim(ProductTestParameters.SequenceID), sqlalchemy.Integer)
+                == int(seq_normalized),
+            ).delete(synchronize_session=False)
+
+            if deleted:
+                logger.info(f"Deleted {deleted} existing PTP rows for {part_id_clean}/{seq_normalized}")
+
+            # Insert new rows
+            for param_name, param_value in params.items():
+                if not param_name or param_name.strip() == "":
+                    continue
+                value_str = str(param_value).strip() if param_value is not None else ""
+                record = ProductTestParameters(
+                    PartID=part_id_clean,
+                    SequenceID=seq_normalized,
+                    ParameterName=param_name.strip(),
+                    ParameterValue=value_str,
+                )
+                session.add(record)
+
+        logger.info(f"Inserted {len(params)} PTP parameters for {part_id_clean}/{seq_normalized}")
+        return True
+
+    except SQLAlchemyError as e:
+        logger.error(f"Database error inserting PTP: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error inserting PTP: {e}")
+        return False
+
+
+def insert_work_order_master(
+    shop_order: str,
+    part_id: str,
+    sequence_id: str,
+    order_qty: int = 1,
+    activation_target: Optional[float] = None,
+) -> bool:
+    """
+    Insert or update a work order in OrderCalibrationMaster.
+
+    If the shop order exists, updates PartID, LastSequenceCalibrated, OrderQTY.
+    Otherwise inserts a new row, using an existing row as template for required columns.
+
+    Args:
+        shop_order: Shop order number.
+        part_id: Part ID.
+        sequence_id: Sequence ID (e.g. "300").
+        order_qty: Order quantity.
+        activation_target: Optional activation target (e.g. 22.8 for 22.8 psi).
+
+    Returns:
+        True if successful, False on error.
+    """
+    if not shop_order or not part_id or not sequence_id:
+        logger.warning("insert_work_order_master: shop_order, part_id, sequence_id required")
+        return False
+
+    try:
+        shop_order_clean = shop_order.strip()
+        part_id_clean = part_id.strip()
+        seq_normalized = str(int(sequence_id.strip()))
+        target = float(activation_target) if activation_target is not None else 22.8
+
+        with session_scope() as session:
+            existing = session.query(OrderCalibrationMaster).filter_by(
+                ShopOrder=shop_order_clean
+            ).first()
+
+            if existing:
+                existing.PartID = part_id_clean
+                existing.LastSequenceCalibrated = seq_normalized
+                existing.OrderQTY = order_qty
+                existing.ActivationTarget = target
+                logger.info(f"Updated work order {shop_order_clean} -> {part_id_clean}/{seq_normalized}")
+            else:
+                # Use an existing row as template (table has many NOT NULL columns)
+                template = (
+                    session.query(OrderCalibrationMaster)
+                    .filter(OrderCalibrationMaster.PartID.isnot(None))
+                    .first()
+                )
+                if not template:
+                    logger.error("No existing OrderCalibrationMaster row to use as template")
+                    return False
+
+                now = datetime.now()
+                # Copy all columns from template, override key fields
+                record = OrderCalibrationMaster(
+                    ShopOrder=shop_order_clean,
+                    PartID=part_id_clean,
+                    LastSequenceCalibrated=seq_normalized,
+                    OrderQTY=order_qty,
+                    OperatorID=template.OperatorID or "Sys",
+                    EquipmentID=template.EquipmentID or "Sys",
+                    StartTime=now,
+                    FinishTime=now,
+                    CalibrationDate=now,
+                    ModificationDate=now,
+                    TemperatureC=template.TemperatureC if template.TemperatureC is not None else 20.0,
+                    ActivationTarget=target,
+                )
+                # Copy activation limits from template (or use defaults around target)
+                record.ActivationMaxAllowable = (
+                    template.ActivationMaxAllowable
+                    if template.ActivationMaxAllowable is not None
+                    else target + 1.0
+                )
+                record.ActivationMinAllowable = (
+                    template.ActivationMinAllowable
+                    if template.ActivationMinAllowable is not None
+                    else target - 1.0
+                )
+                session.add(record)
+                logger.info(f"Inserted work order {shop_order_clean} -> {part_id_clean}/{seq_normalized}")
+
+        return True
+
+    except SQLAlchemyError as e:
+        logger.error(f"Database error inserting work order: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error inserting work order: {e}")
+        return False
 
 
 def get_tested_serials(shop_order: str, part_id: str, sequence_id: str) -> Set[int]:

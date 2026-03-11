@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -230,6 +231,101 @@ def test_executor_precision_targets_use_close_limit_for_decreasing() -> None:
     assert approach == pytest.approx(convert_pressure(600.0, 'Torr', 'PSI'), rel=1e-6)
     assert target_out == pytest.approx(convert_pressure(400.0, 'Torr', 'PSI'), rel=1e-6)
     assert target_back == pytest.approx(convert_pressure(600.0, 'Torr', 'PSI'), rel=1e-6)
+
+
+def test_executor_precision_targets_use_close_limit_for_increasing() -> None:
+    setup = TestSetup(
+        part_id='17025',
+        sequence_id='399',
+        units_code='1',
+        units_label='PSI',
+        activation_direction='Increasing',
+        activation_target=25.0,
+        pressure_reference='gauge',
+        terminals={},
+        bands={
+            'increasing': {'lower': 24.0, 'upper': 26.0},
+            'decreasing': {'lower': 22.0, 'upper': 23.0},
+            'reset': {'lower': 21.0, 'upper': 27.0},
+        },
+        raw={},
+    )
+    executor = _TestExecutor(
+        port_id='port_a',
+        port=cast(Any, _FakePort([True])),
+        test_setup=setup,
+        config={'control': {'cycling': {}, 'ramps': {}, 'edge_detection': {}, 'debounce': {}}},
+        get_latest_reading=lambda _pid: None,
+        get_barometric_psi=lambda _pid: 14.7,
+    )
+    approach, target_out, target_back, source = executor._resolve_precision_targets(
+        min_psi=22.0,
+        max_psi=26.0,
+        activation_direction=1,
+    )
+    assert source == 'ptp-close-limit'
+    assert approach == pytest.approx(22.0, rel=1e-6)
+    assert target_out == pytest.approx(26.0, rel=1e-6)
+    assert target_back == pytest.approx(22.0, rel=1e-6)
+
+
+def test_executor_precision_targets_reject_bad_cycle_estimates_and_fallback() -> None:
+    setup = TestSetup(
+        part_id='17025',
+        sequence_id='399',
+        units_code='1',
+        units_label='PSI',
+        activation_direction='Increasing',
+        activation_target=25.0,
+        pressure_reference='gauge',
+        terminals={},
+        bands={
+            'increasing': {'lower': 24.0, 'upper': 26.0},
+            'decreasing': {'lower': 22.0, 'upper': 23.0},
+            'reset': {'lower': 21.0, 'upper': 27.0},
+        },
+        raw={},
+    )
+    executor = _TestExecutor(
+        port_id='port_a',
+        port=cast(Any, _FakePort([True])),
+        test_setup=setup,
+        config={'control': {'cycling': {}, 'ramps': {}, 'edge_detection': {}, 'debounce': {}}},
+        get_latest_reading=lambda _pid: None,
+        get_barometric_psi=lambda _pid: 14.7,
+    )
+    # Invalid for increasing direction: activation should be above deactivation.
+    executor._cycle_activation_samples = [23.0]
+    executor._cycle_deactivation_samples = [24.5]
+    approach, target_out, target_back, source = executor._resolve_precision_targets(
+        min_psi=22.0,
+        max_psi=26.0,
+        activation_direction=1,
+    )
+    assert source == 'ptp-close-limit'
+    assert approach == pytest.approx(22.0, rel=1e-6)
+    assert target_out == pytest.approx(26.0, rel=1e-6)
+    assert target_back == pytest.approx(22.0, rel=1e-6)
+
+
+def test_executor_run_precision_does_not_skip_atmosphere_gate() -> None:
+    executor = _build_executor(_FakePort([True]))
+    captured: dict[str, bool] = {}
+
+    executor._ensure_alicat_units = lambda: None
+    executor._resolve_sweep_mode = lambda: 'pressure'
+    executor._resolve_sweep_bounds = lambda: (0.0, 2.0)
+    executor._cycle_phase_runner.run_pre_approach = lambda _mode, _bounds: None
+    executor._run_single_cycle = lambda _mode, _bounds: None
+    executor._run_precision_sweep = (
+        lambda _mode, _bounds, skip_atmosphere_gate=False: (
+            captured.__setitem__('skip_atmosphere_gate', skip_atmosphere_gate)
+            or SimpleNamespace(activation_psi=1.2, deactivation_psi=0.8)
+        )
+    )
+
+    executor._run()
+    assert captured['skip_atmosphere_gate'] is False
 
 
 @dataclass

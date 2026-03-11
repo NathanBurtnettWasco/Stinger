@@ -69,5 +69,13 @@ $manifest = [ordered]@{
 
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Path $manifestPath -Encoding UTF8
 
+# Publish to shared drive: mirror build output (clears obsolete files, copies new)
+$publishPath = 'Z:\Engineering\Program Builds\Python Builds\Stinger'
+New-Item -ItemType Directory -Path $publishPath -Force | Out-Null
+& robocopy $distPath $publishPath /MIR /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+# Robocopy exit: 0=nothing, 1=copied, 2=extra, 3=copied+extra, 4=mismatch. 8+=error
+if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit $LASTEXITCODE" }
+
 Write-Host "Build complete: $exePath"
 Write-Host "Manifest: $manifestPath"
+Write-Host "Published to: $publishPath"

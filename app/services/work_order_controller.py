@@ -42,7 +42,7 @@ from app.services.debug_action_service import DebugActionService
 from app.services.port_runtime_state import PortRuntimeState
 from app.services.ui_bridge import UIBridge
 from app.hardware.port import Port, PortManager, PortId, PortReading
-from app.services.measurement_source import get_measurement_settings
+from app.services.measurement_source import get_measurement_settings, select_main_pressure_abs_psi
 from app.services.pressure_domain import (
     infer_barometric_pressure,
     infer_setpoint_reference,
@@ -1261,9 +1261,15 @@ class WorkOrderController(QObject):
                 if not port.alicat.cancel_hold():
                     logger.warning('%s: Failed to cancel Alicat hold', port_id)
                 
-                fast_rate = self._resolve_sweep_rates()[2]
-                if not port.alicat.set_ramp_rate(fast_rate):
-                    logger.error('%s: Failed to set ramp rate to %.4f PSI/s', port_id, fast_rate)
+                # QAL15 sequence (300) should jump immediately when entering
+                # pressurize so the initial approach is always rapid.
+                if is_qal15:
+                    pressurize_rate = 0.0
+                else:
+                    pressurize_rate = self._resolve_sweep_rates()[2]
+
+                if not port.alicat.set_ramp_rate(pressurize_rate):
+                    logger.error('%s: Failed to set ramp rate to %.4f PSI/s', port_id, pressurize_rate)
                     return
 
                 target_abs = self._to_absolute_pressure(
@@ -1283,13 +1289,22 @@ class WorkOrderController(QObject):
                 start = time.perf_counter()
                 direction = 1 if sweep_mode == 'pressure' else -1
                 timeout = float(self._config.get('control', {}).get('edge_detection', {}).get('timeout_sec', 60.0))
+                preferred_source, fallback_on_unavailable = get_measurement_settings(self._config)
                 while time.perf_counter() - start < timeout:
                     reading = self._get_latest_reading(port_id)
-                    if reading and reading.transducer:
-                        p = reading.transducer.pressure
-                        if direction > 0 and p >= target_abs * 0.95:
+                    if reading is not None:
+                        pressure_abs_psi, _source_used = select_main_pressure_abs_psi(
+                            reading=reading,
+                            preferred_source=preferred_source,
+                            fallback_on_unavailable=fallback_on_unavailable,
+                            barometric_psi=self._get_barometric_pressure(port_id),
+                        )
+                        if pressure_abs_psi is None:
+                            time.sleep(0.05)
+                            continue
+                        if direction > 0 and pressure_abs_psi >= target_abs * 0.95:
                             break
-                        if direction < 0 and p <= target_abs * 1.05:
+                        if direction < 0 and pressure_abs_psi <= target_abs * 1.05:
                             break
                     time.sleep(0.05)
 
@@ -1422,6 +1437,32 @@ class WorkOrderController(QObject):
             logger.warning('%s: Cannot trigger error - state machine not found', port_id)
             return
         was_precision = sm.current_state == PortState.PRECISION_TEST.value
+        normalized = (message or '').strip().lower()
+
+        # Treat edge/switch-miss as a recoverable test failure:
+        # vent to atmosphere, return to IDLE, and notify operator.
+        recoverable_failure = (
+            'edge_not_found' in normalized
+            or 'activation edge not detected' in normalized
+            or 'deactivation edge not detected' in normalized
+            or 'no_switch_detected' in normalized
+            or 'no switch detected' in normalized
+        )
+        if recoverable_failure:
+            logger.warning('%s: Recoverable test failure: %s', port_id, message)
+            if sm.can_trigger('cancel'):
+                sm.trigger('cancel')
+            elif sm.can_trigger('vent'):
+                sm.trigger('vent')
+            self._vent_port(port_id)
+            if was_precision:
+                self._release_precision_slot(port_id, reason='recoverable-failure')
+            if self._ui_bridge:
+                self._ui_bridge.show_info_message(
+                    'Test Failed',
+                    f'{port_id.upper().replace("_", " ")}: {message}',
+                )
+            return
         
         # Only transition to error if we're in a state that allows it
         # If already in error state, just update the message

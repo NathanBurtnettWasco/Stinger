@@ -18,11 +18,21 @@ from app.services.pressure_calibration import apply_error_model, build_legacy_tw
 logger = logging.getLogger(__name__)
 
 ljm: Any = None
+LJM_IMPORT_ERROR: Optional[str] = None
+LJM_NATIVE_LIB_LOADED = False
 try:
     from labjack import ljm as _ljm
     ljm = _ljm
-    LJM_AVAILABLE = True
-except ImportError:
+    LJM_NATIVE_LIB_LOADED = getattr(_ljm, '_staticLib', None) is not None
+    LJM_AVAILABLE = bool(LJM_NATIVE_LIB_LOADED)
+    if not LJM_AVAILABLE:
+        LJM_IMPORT_ERROR = (
+            'labjack.ljm imported but the native LJM driver library did not load '
+            '(LabJackM.dll unavailable).'
+        )
+        logger.warning(LJM_IMPORT_ERROR)
+except ImportError as exc:
+    LJM_IMPORT_ERROR = f'labjack.ljm not available: {exc}'
     logger.warning('labjack.ljm not available - LabJack hardware unavailable')
     LJM_AVAILABLE = False
 
@@ -130,6 +140,7 @@ class LabJackController:
 
         self._sim_pressure = 14.7
         self._sim_switch_activated = False
+        self._allow_simulated_hardware = bool(config.get('allow_simulated_hardware', False))
 
         logger.info(
             'LabJackController initialized for %s/%s',
@@ -206,6 +217,8 @@ class LabJackController:
     def read_dio_values(self, max_dio: int = 19) -> Optional[Dict[int, int]]:
         """Read all DIO values from 0..max_dio inclusive."""
         if not LJM_AVAILABLE:
+            if not self._allow_simulated_hardware:
+                return None
             return {dio: 0 for dio in range(max_dio + 1)}
 
         handle = self._shared_handle
@@ -229,9 +242,13 @@ class LabJackController:
     def configure(self) -> bool:
         """Open the LabJack connection and set to safe state."""
         if not LJM_AVAILABLE:
-            self._is_configured = True
-            self._last_status = 'Configured (no hardware)'
-            return True
+            if self._allow_simulated_hardware:
+                self._is_configured = True
+                self._last_status = 'Configured (simulated)'
+                return True
+            self._is_configured = False
+            self._last_status = f'Config Error: {LJM_IMPORT_ERROR or "LJM unavailable"}'
+            return False
 
         with self._lock:
             try:
@@ -402,6 +419,8 @@ class LabJackController:
         timestamp = time.time()
 
         if not LJM_AVAILABLE:
+            if not self._allow_simulated_hardware:
+                return None
             voltage_range = self.voltage_max - self.voltage_min
             pressure_range = self.pressure_max - self.pressure_min
             voltage = self.voltage_min + (
@@ -456,6 +475,8 @@ class LabJackController:
         timestamp = time.time()
 
         if not LJM_AVAILABLE:
+            if not self._allow_simulated_hardware:
+                return None
             return SwitchState(
                 no_active=self._sim_switch_activated,
                 nc_active=not self._sim_switch_activated,
@@ -494,6 +515,8 @@ class LabJackController:
     def set_solenoid(self, to_vacuum: bool) -> bool:
         """Set solenoid state."""
         if not LJM_AVAILABLE:
+            if not self._allow_simulated_hardware:
+                return False
             logger.debug('LabJack solenoid -> %s', 'Vacuum' if to_vacuum else 'Atmosphere')
             return True
 
@@ -572,4 +595,7 @@ class LabJackController:
             'identifier': self.identifier,
             'configured': self._is_configured,
             'status': self._last_status,
+            'driver_loaded': LJM_AVAILABLE,
+            'driver_error': LJM_IMPORT_ERROR,
+            'simulated': self._allow_simulated_hardware and not LJM_AVAILABLE,
         }

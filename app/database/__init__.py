@@ -12,6 +12,8 @@ from .session import get_db_session, session_scope
 from .operations import (
     validate_shop_order,
     load_test_parameters,
+    insert_test_parameters,
+    insert_work_order_master,
     save_test_result,
     get_next_serial_number,
 )
@@ -24,6 +26,8 @@ __all__ = [
     'session_scope',
     'validate_shop_order',
     'load_test_parameters',
+    'insert_test_parameters',
+    'insert_work_order_master',
     'save_test_result',
     'get_next_serial_number',
 ]

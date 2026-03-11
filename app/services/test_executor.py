@@ -617,10 +617,11 @@ class TestExecutor:
                 return
 
             # ---- Precision test phase ----
-            # Skip atmosphere gate since we're already at deactivation after cycling
+            # Always return to a known baseline before precision so the
+            # approach starts from the correct side of the activation edge.
             self._emit_event('precision_started', sweep_mode=sweep_mode)
             self._last_precision_missing_edge = None
-            result = self._run_precision_sweep(sweep_mode, bounds, skip_atmosphere_gate=True)
+            result = self._run_precision_sweep(sweep_mode, bounds)
 
             if self._cancel_and_emit():
                 return
@@ -1319,27 +1320,46 @@ class TestExecutor:
                 target_out = min(hw_max, activation_estimate + offset)
                 # Reverse sweep down past deactivation to find the deactivation edge.
                 target_back = max(min_psi, deactivation_estimate - margin)
-            # Log warning if target_out goes outside PTP bounds
-            out_of_bounds_note = ''
-            if activation_direction < 0 and target_out < min_psi:
-                out_of_bounds_note = f' (target_out below PTP min={min_psi:.4f})'
-            elif activation_direction > 0 and target_out > max_psi:
-                out_of_bounds_note = f' (target_out above PTP max={max_psi:.4f})'
-            
-            logger.info(
-                '%s: Precision targets from cycle estimates: approach=%.4f out=%.4f back=%.4f '
-                '(act_est=%.4f deact_est=%.4f offset=%.4f margin=%.4f)%s',
+            validation_error = self._validate_cycle_estimate_targets(
+                activation_direction=activation_direction,
+                approach_target=approach_target,
+                target_out=target_out,
+                target_back=target_back,
+                activation_estimate=activation_estimate,
+                deactivation_estimate=deactivation_estimate,
+            )
+            if validation_error is None:
+                out_of_bounds_note = ''
+                if activation_direction < 0 and target_out < min_psi:
+                    out_of_bounds_note = f' (target_out below PTP min={min_psi:.4f})'
+                elif activation_direction > 0 and target_out > max_psi:
+                    out_of_bounds_note = f' (target_out above PTP max={max_psi:.4f})'
+                logger.info(
+                    '%s: Precision targets from cycle estimates: approach=%.4f out=%.4f back=%.4f '
+                    '(act_est=%.4f deact_est=%.4f offset=%.4f margin=%.4f)%s',
+                    self._port_id,
+                    approach_target,
+                    target_out,
+                    target_back,
+                    activation_estimate,
+                    deactivation_estimate,
+                    offset,
+                    margin,
+                    out_of_bounds_note,
+                )
+                return (approach_target, target_out, target_back, 'cycle-estimate-offset-close-limit')
+            logger.warning(
+                '%s: Rejecting cycle-estimate precision targets: %s '
+                '(direction=%s act_est=%.4f deact_est=%.4f approach=%.4f out=%.4f back=%.4f)',
                 self._port_id,
+                validation_error,
+                'increasing' if activation_direction > 0 else 'decreasing',
+                activation_estimate,
+                deactivation_estimate,
                 approach_target,
                 target_out,
                 target_back,
-                activation_estimate,
-                deactivation_estimate,
-                offset,
-                margin,
-                out_of_bounds_note,
             )
-            return (approach_target, target_out, target_back, 'cycle-estimate-offset-close-limit')
 
         if self._test_setup:
             if activation_direction < 0:
@@ -1358,6 +1378,14 @@ class TestExecutor:
                     _deact_low, deact_high = deactivation_band
                     if deact_high > act_low:
                         close_limit = deact_high
+                        logger.info(
+                            '%s: Precision targets from PTP close-limit (decreasing): '
+                            'approach=%.4f out=%.4f back=%.4f',
+                            self._port_id,
+                            close_limit,
+                            act_low,
+                            close_limit,
+                        )
                         return (close_limit, act_low, close_limit, 'ptp-close-limit')
             else:
                 activation_band = self._band_limits_to_psi(
@@ -1375,11 +1403,66 @@ class TestExecutor:
                     deact_low, _deact_high = deactivation_band
                     if act_high > deact_low:
                         close_limit = deact_low
+                        logger.info(
+                            '%s: Precision targets from PTP close-limit (increasing): '
+                            'approach=%.4f out=%.4f back=%.4f',
+                            self._port_id,
+                            close_limit,
+                            act_high,
+                            close_limit,
+                        )
                         return (close_limit, act_high, close_limit, 'ptp-close-limit')
 
         if activation_direction < 0:
+            logger.info(
+                '%s: Precision targets from bounds close-limit (decreasing): '
+                'approach=%.4f out=%.4f back=%.4f',
+                self._port_id,
+                max_psi,
+                min_psi,
+                max_psi,
+            )
             return (max_psi, min_psi, max_psi, 'bounds-close-limit')
+        logger.info(
+            '%s: Precision targets from bounds close-limit (increasing): '
+            'approach=%.4f out=%.4f back=%.4f',
+            self._port_id,
+            min_psi,
+            max_psi,
+            min_psi,
+        )
         return (min_psi, max_psi, min_psi, 'bounds-close-limit')
+
+    def _validate_cycle_estimate_targets(
+        self,
+        activation_direction: int,
+        approach_target: float,
+        target_out: float,
+        target_back: float,
+        activation_estimate: float,
+        deactivation_estimate: float,
+    ) -> Optional[str]:
+        eps = 1e-6
+        if activation_direction > 0:
+            if activation_estimate <= deactivation_estimate + eps:
+                return 'activation estimate is not above deactivation estimate for increasing direction'
+            if not (approach_target < target_out):
+                return 'approach/out ordering does not sweep upward for increasing direction'
+            if not (approach_target <= activation_estimate <= target_out):
+                return 'activation estimate is not bracketed by increasing out-sweep'
+            if not (target_back <= deactivation_estimate <= target_out):
+                return 'deactivation estimate is not bracketed by return sweep'
+            return None
+
+        if activation_estimate >= deactivation_estimate - eps:
+            return 'activation estimate is not below deactivation estimate for decreasing direction'
+        if not (approach_target > target_out):
+            return 'approach/out ordering does not sweep downward for decreasing direction'
+        if not (approach_target >= activation_estimate >= target_out):
+            return 'activation estimate is not bracketed by decreasing out-sweep'
+        if not (target_back >= deactivation_estimate >= target_out):
+            return 'deactivation estimate is not bracketed by return sweep'
+        return None
 
     def _band_limits_to_psi(
         self,

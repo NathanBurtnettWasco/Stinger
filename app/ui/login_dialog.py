@@ -134,8 +134,8 @@ class LoginDialog(QDialog):
                 color: #1a1a2e; 
                 border: 1px solid rgba(0, 0, 0, 0.12);
                 border-radius: 8px;
-                padding: 10px 14px;
-                font-size: 13px;
+                padding: 12px 16px;
+                font-size: 15px;
             }
             QLineEdit:focus {
                 border: 2px solid #2563eb;
@@ -150,30 +150,36 @@ class LoginDialog(QDialog):
     def setup_ui(self) -> None:
         """Set up the UI components for the dialog."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 32, 32, 32)
-        layout.setSpacing(20)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(16)
 
         # Title
         title_label = QLabel("Operator Login")
-        title_font = QFont("Segoe UI, Inter, Arial", 20, QFont.Weight.Bold)
+        title_font = QFont("Segoe UI, Inter, Arial", 24, QFont.Weight.Bold)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("color: #1a1a2e; margin-bottom: 8px;")
+        title_label.setStyleSheet("color: #1a1a2e; margin-bottom: 6px;")
         layout.addWidget(title_label)
         
         # Subtitle
         subtitle_label = QLabel("Scan or enter your credentials to begin")
-        subtitle_font = QFont("Segoe UI, Inter, Arial", 11)
+        subtitle_font = QFont("Segoe UI, Inter, Arial", 13)
         subtitle_label.setFont(subtitle_font)
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle_label.setStyleSheet("color: #6b7280; margin-bottom: 16px;")
+        subtitle_label.setStyleSheet("color: #6b7280; margin-bottom: 12px;")
         layout.addWidget(subtitle_label)
 
         # Main Form Layout
         form_layout = QFormLayout()
         form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form_layout.setVerticalSpacing(10)
+        form_layout.setHorizontalSpacing(16)
+        form_layout.setVerticalSpacing(14)
+
+        label_font = QFont()
+        label_font.setPointSize(14)
+        label_font.setWeight(QFont.Weight.Medium)
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         input_font = QFont()
         input_font.setPointSize(14)
@@ -194,40 +200,50 @@ class LoginDialog(QDialog):
         self.order_qty_input = self._create_input_field("Auto-populated", input_font, read_only=True)
         form_layout.addRow("Order Qty:", self.order_qty_input)
 
+        for row in range(form_layout.rowCount()):
+            label_widget = form_layout.itemAt(row, QFormLayout.ItemRole.LabelRole).widget()
+            if isinstance(label_widget, QLabel):
+                label_widget.setFont(label_font)
+
         layout.addLayout(form_layout)
 
         # Status Label
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setMinimumHeight(30)
+        self.status_label.setStyleSheet("font-size: 13px;")
         layout.addWidget(self.status_label)
 
         # Test mode toggle (centered)
         test_mode_container = QHBoxLayout()
         test_mode_container.addStretch()
         self.test_mode_checkbox = QCheckBox("Test Mode (PIN required)")
-        self.test_mode_checkbox.setStyleSheet("color: #1a1a2e; font-weight: bold;")
+        self.test_mode_checkbox.setStyleSheet(
+            "color: #1a1a2e; font-weight: bold; font-size: 14px;"
+        )
         test_mode_container.addWidget(self.test_mode_checkbox)
         test_mode_container.addStretch()
         layout.addLayout(test_mode_container)
 
-        layout.addSpacing(10)
+        layout.addSpacing(6)
 
         # Buttons Layout
         button_layout = QHBoxLayout()
-        button_layout.setSpacing(20)
+        button_layout.setSpacing(24)
 
         button_font = QFont()
-        button_font.setPointSize(12)
+        button_font.setPointSize(13)
+        button_font.setWeight(QFont.Weight.Bold)
 
         self.login_button = QPushButton("Login")
         self.login_button.setDefault(True)
         self.login_button.setFont(button_font)
-        self.login_button.setMinimumSize(120, 40)
+        self.login_button.setMinimumSize(150, 52)
         self.login_button.setStyleSheet(
             "QPushButton {"
             " background-color: #16a34a; color: white;"
-            " font-size: 12pt; font-weight: bold;"
-            " padding: 10px; border-radius: 5px;"
+            " font-size: 13pt; font-weight: bold;"
+            " padding: 12px; border-radius: 7px;"
             " border: none;"
             "}"
             "QPushButton:hover { background-color: #15803d; }"
@@ -236,12 +252,12 @@ class LoginDialog(QDialog):
 
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setFont(button_font)
-        self.cancel_button.setMinimumSize(120, 40)
+        self.cancel_button.setMinimumSize(150, 52)
         self.cancel_button.setStyleSheet(
             "QPushButton {"
             " background-color: #dc2626; color: white;"
-            " font-size: 12pt; font-weight: bold;"
-            " padding: 10px; border-radius: 5px;"
+            " font-size: 13pt; font-weight: bold;"
+            " padding: 12px; border-radius: 7px;"
             " border: none;"
             "}"
             "QPushButton:hover { background-color: #b91c1c; }"
@@ -713,7 +729,7 @@ class LoginDialog(QDialog):
         input_field = QLineEdit()
         input_field.setPlaceholderText(placeholder)
         input_field.setFont(font)
-        input_field.setMinimumHeight(40)
+        input_field.setMinimumHeight(50)
         input_field.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if read_only:
             input_field.setReadOnly(True)

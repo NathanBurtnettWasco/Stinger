@@ -13,6 +13,7 @@ def _base_config() -> dict[str, object]:
         'device_type': 'T7',
         'connection_type': 'USB',
         'identifier': 'ANY',
+        'allow_simulated_hardware': True,
         'transducer_ain': 0,
         'transducer_voltage_min': 0.5,
         'transducer_voltage_max': 4.5,

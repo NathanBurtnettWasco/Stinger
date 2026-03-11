@@ -19,7 +19,8 @@ from PyQt6.QtWidgets import (
     QTabWidget, QLabel, QPushButton, QFrame,
     QMessageBox, QInputDialog, QLineEdit, QProgressBar, QSizePolicy,
     QToolButton, QMenu, QButtonGroup, QRadioButton, QComboBox, QDialog,
-    QCheckBox, QTableWidget, QTableWidgetItem, QTextEdit, QHeaderView
+    QCheckBox, QTableWidget, QTableWidgetItem, QTextEdit, QHeaderView,
+    QGridLayout
 )
 
 if TYPE_CHECKING:
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 
 from app.ui.login_dialog import LoginDialog
 from app.ui.port_column import PortColumn
-from app.ui.styles import STYLES, STATUS_COLORS, status_badge_style
+from app.ui.styles import STYLES, STATUS_COLORS, status_badge_style, status_tool_button_style
 from app.ui.widgets import PressureBarWidget
 from app.ui.debug_panel import DebugPortPanel
 from app.services.ptp_service import convert_pressure
@@ -224,37 +225,24 @@ class MainWindow(QMainWindow):
         ptp_layout.addWidget(ptp_title)
 
         ptp_card = QFrame()
-        ptp_card.setStyleSheet(
-            "background-color: #ffffff;"
-            "border: 1px solid rgba(0, 0, 0, 0.10);"
-            "border-radius: 10px;"
-        )
+        ptp_card.setStyleSheet(STYLES["compact_panel_shell"])
         ptp_row = QHBoxLayout(ptp_card)
         ptp_row.setContentsMargins(8, 3, 8, 3)
         ptp_row.setSpacing(6)
 
         self._lbl_ptp_setpoint = QLabel("Setpoint: --")
         self._lbl_ptp_setpoint.setFont(QFont("Segoe UI, Inter, Arial", 9, QFont.Weight.Bold))
-        self._lbl_ptp_setpoint.setStyleSheet(
-            "color: #1a1a2e; background-color: #f7f8fa;"
-            "border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 7px; padding: 1px 6px;"
-        )
+        self._lbl_ptp_setpoint.setStyleSheet(STYLES["topbar_meta_chip"])
         ptp_row.addWidget(self._lbl_ptp_setpoint)
 
         self._lbl_ptp_direction = QLabel("Direction: --")
         self._lbl_ptp_direction.setFont(QFont("Segoe UI, Inter, Arial", 9, QFont.Weight.Bold))
-        self._lbl_ptp_direction.setStyleSheet(
-            "color: #1a1a2e; background-color: #f7f8fa;"
-            "border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 7px; padding: 1px 6px;"
-        )
+        self._lbl_ptp_direction.setStyleSheet(STYLES["topbar_meta_chip"])
         ptp_row.addWidget(self._lbl_ptp_direction)
 
         self._lbl_ptp_units = QLabel("Units: --")
         self._lbl_ptp_units.setFont(QFont("Segoe UI, Inter, Arial", 9, QFont.Weight.Bold))
-        self._lbl_ptp_units.setStyleSheet(
-            "color: #1a1a2e; background-color: #f7f8fa;"
-            "border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 7px; padding: 1px 6px;"
-        )
+        self._lbl_ptp_units.setStyleSheet(STYLES["topbar_meta_chip"])
         ptp_row.addWidget(self._lbl_ptp_units)
 
         ptp_row.addStretch()
@@ -286,14 +274,14 @@ class MainWindow(QMainWindow):
         progress_row.addWidget(self._progress_bar, 1)
 
         self._lbl_progress_percent = QLabel("0%")
-        self._lbl_progress_percent.setStyleSheet("color: #1a1a2e; font-size: 11px; font-weight: bold;")
+        self._lbl_progress_percent.setStyleSheet(STYLES["progress_label"])
         self._lbl_progress_percent.setFont(QFont("Segoe UI, Inter, Arial", 11, QFont.Weight.Bold))
         self._lbl_progress_percent.setFixedWidth(32)
         self._lbl_progress_percent.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progress_row.addWidget(self._lbl_progress_percent)
 
         self._lbl_progress = QLabel("0 / 0")
-        self._lbl_progress.setStyleSheet("color: #1a1a2e; font-size: 11px; font-weight: bold;")
+        self._lbl_progress.setStyleSheet(STYLES["progress_label"])
         self._lbl_progress.setFont(QFont("Segoe UI, Inter, Arial", 11, QFont.Weight.Bold))
         self._lbl_progress.setFixedWidth(46)
         self._lbl_progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -351,19 +339,7 @@ class MainWindow(QMainWindow):
         # Add a pulsing dot indicator using bullet character
         dot = "●"
         self._status_button.setText(f"{dot} {self._status_level.upper()}  v")
-        self._status_button.setStyleSheet(
-            "QToolButton {"
-            " background-color: #ffffff;"
-            f" color: {color};"
-            f" border: 1px solid {color};"
-            " border-radius: 17px;"
-            " padding: 7px 14px;"
-            " font-weight: bold;"
-            " font-size: 11px;"
-            " min-width: 118px;"
-            " text-align: center; }"
-            f"QToolButton:hover {{ border: 1px solid {color}; background-color: rgba(0, 0, 0, 0.04); }}"
-        )
+        self._status_button.setStyleSheet(status_tool_button_style(color))
 
     def _update_status_menu(self) -> None:
         if not self._status_actions:
@@ -505,6 +481,61 @@ class MainWindow(QMainWindow):
         self._admin_labels[key] = value
         return row
 
+    def _build_hardware_status_grid(self) -> QGridLayout:
+        """Build a grid layout for hardware status with aligned label/badge columns and visual grouping."""
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.setColumnMinimumWidth(0, 115)
+
+        # Connectivity group
+        connectivity_rows = [
+            ("Alicat", "hardware_alicat"),
+            ("DAQ", "hardware_daq"),
+            ("Serial", "hardware_serial"),
+        ]
+        # Operational group
+        operational_rows = [
+            ("Precision Owner", "precision_owner"),
+            ("Precision Queue", "precision_queue"),
+            ("Alicat Poll", "alicat_poll_profile"),
+        ]
+
+        row_idx = 0
+        for label_text, key in connectivity_rows:
+            name = QLabel(label_text)
+            name.setStyleSheet(STYLES["label_muted_12"])
+            grid.addWidget(name, row_idx, 0)
+            badge = QLabel("Unknown")
+            badge.setStyleSheet(status_badge_style("unknown"))
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setMinimumWidth(120)
+            grid.addWidget(badge, row_idx, 1, Qt.AlignmentFlag.AlignLeft)
+            self._admin_labels[key] = badge
+            row_idx += 1
+
+        # Thin separator line between connectivity and operational groups
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("color: rgba(0,0,0,0.10); margin: 2px 0;")
+        grid.addWidget(separator, row_idx, 0, 1, 2)
+        row_idx += 1
+
+        for label_text, key in operational_rows:
+            name = QLabel(label_text)
+            name.setStyleSheet(STYLES["label_muted_12"])
+            grid.addWidget(name, row_idx, 0)
+            badge = QLabel("Unknown")
+            badge.setStyleSheet(status_badge_style("unknown"))
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setMinimumWidth(120)
+            grid.addWidget(badge, row_idx, 1, Qt.AlignmentFlag.AlignLeft)
+            self._admin_labels[key] = badge
+            row_idx += 1
+
+        grid.setColumnStretch(2, 1)
+        return grid
+
     def _build_admin_action_row(self, actions: list[Tuple[str, Any]]) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -637,7 +668,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(16)
 
         placeholder_label = QLabel(placeholder_text)
-        placeholder_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        placeholder_label.setFont(QFont("Segoe UI, Inter, Arial", 20, QFont.Weight.Bold))
         placeholder_label.setStyleSheet(STYLES["placeholder_heading"])
         placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(placeholder_label)
@@ -675,7 +706,7 @@ class MainWindow(QMainWindow):
         header.setSpacing(16)
 
         title = QLabel("Debug Mode")
-        title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        title.setFont(QFont("Segoe UI, Inter, Arial", 20, QFont.Weight.Bold))
         title.setStyleSheet("color: #1a1a2e;")
         header.addWidget(title)
 
@@ -755,7 +786,7 @@ class MainWindow(QMainWindow):
         
         # Add actual content
         title = QLabel("Admin / Observability")
-        title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        title.setFont(QFont("Segoe UI, Inter, Arial", 20, QFont.Weight.Bold))
         title.setStyleSheet("color: #1a1a2e;")
         content_layout.addWidget(title)
 
@@ -763,12 +794,7 @@ class MainWindow(QMainWindow):
         top_row.setSpacing(16)
 
         hardware_card, hardware_layout = self._build_admin_card("Hardware Status")
-        hardware_layout.addLayout(self._build_admin_status_row("Alicat", "hardware_alicat"))
-        hardware_layout.addLayout(self._build_admin_status_row("DAQ", "hardware_daq"))
-        hardware_layout.addLayout(self._build_admin_status_row("Serial", "hardware_serial"))
-        hardware_layout.addLayout(self._build_admin_status_row("Precision Owner", "precision_owner"))
-        hardware_layout.addLayout(self._build_admin_status_row("Precision Queue", "precision_queue"))
-        hardware_layout.addLayout(self._build_admin_status_row("Alicat Poll", "alicat_poll_profile"))
+        hardware_layout.addLayout(self._build_hardware_status_grid())
         hardware_layout.addLayout(self._build_admin_action_row([
             ("Reconnect Hardware", lambda: self._emit_admin_action("reconnect_hardware", {})),
             ("Refresh", lambda: self._emit_admin_action("refresh_hardware", {})),

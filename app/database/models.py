@@ -35,7 +35,12 @@ class OrderCalibrationMaster(Base):
     StartTime = Column(DateTime)
     FinishTime = Column(DateTime)
     CalibrationDate = Column(DateTime)
-    
+    ModificationDate = Column(DateTime)
+    TemperatureC = Column(Numeric(10, 4))
+    ActivationTarget = Column(Numeric(10, 4))
+    ActivationMaxAllowable = Column(Numeric(10, 4))
+    ActivationMinAllowable = Column(Numeric(10, 4))
+
     def __repr__(self):
         return f"<OrderCalibrationMaster(ShopOrder='{self.ShopOrder}', PartID='{self.PartID}')>"
 

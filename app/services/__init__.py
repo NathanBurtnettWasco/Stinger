@@ -30,7 +30,11 @@ class _Worker(QRunnable):
         except Exception as exc:
             result = None
             error = exc
-        self.signals.finished.emit(result, error)
+        try:
+            self.signals.finished.emit(result, error)
+        except RuntimeError:
+            # Signals object deleted (e.g. app shutting down) - ignore
+            pass
 
 
 def run_async(fn: Callable[[], Any], callback: Callable[[Any, Optional[Exception]], None]) -> _Worker:

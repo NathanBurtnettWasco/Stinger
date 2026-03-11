@@ -6,6 +6,7 @@ Entry point for the application.
 
 import sys
 import logging
+import threading
 from pathlib import Path
 
 # Add app to path
@@ -16,10 +17,6 @@ from PyQt6.QtCore import Qt
 
 from app.core.config import load_config, setup_logging
 from app.core.version import __version__, __app_name__
-from app.ui import MainWindow
-from app.services.ui_bridge import UIBridge
-from app.services.work_order_controller import WorkOrderController
-from app.database.session import initialize_database
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +38,23 @@ def main():
     setup_logging(config)
     
     logger.info(f"Starting {__app_name__} v{__version__}")
-    
-    # Initialize database
-    db_config = config.get('database', {})
-    if not initialize_database(db_config):
-        logger.warning("Database connection failed - running in offline mode")
-        # Continue anyway for development
+
+    # Defer heavy imports so startup reaches UI sooner.
+    from app.ui import MainWindow
+    from app.services.ui_bridge import UIBridge
+    from app.services.work_order_controller import WorkOrderController
+    from app.database.session import initialize_database
+
+    # Initialize database in the background so failed/slow SQL handshakes
+    # do not block first paint. Controller status polling will pick this up.
+    def _init_database_async() -> None:
+        db_config = config.get('database', {})
+        if not initialize_database(db_config):
+            logger.warning("Database connection failed - running in offline mode")
+        else:
+            logger.info("Database initialization completed")
+
+    threading.Thread(target=_init_database_async, daemon=True).start()
     
     # Create Qt application
     app = QApplication(sys.argv)
