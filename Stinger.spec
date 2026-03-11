@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
 
 
@@ -10,10 +12,20 @@ hiddenimports += collect_submodules('pyqtgraph')
 hiddenimports += collect_submodules('transitions')
 hiddenimports += collect_submodules('serial')
 
+binaries = []
+for candidate in (
+    Path(r"C:\Windows\System32\LabJackM.dll"),
+    Path(r"C:\Program Files\LabJack\Drivers\LabJackM.dll"),
+    Path(r"C:\Program Files (x86)\LabJack\Drivers\LabJackM.dll"),
+):
+    if candidate.exists():
+        binaries.append((str(candidate), "."))
+        break
+
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=[
         ('stinger_config.yaml', '.'),
     ],

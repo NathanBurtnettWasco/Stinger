@@ -88,12 +88,12 @@ def status_badge_style(ok: bool) -> str:
         border = "#fca5a5"
     return (
         f"background: {bg}; color: {fg}; border: 1px solid {border}; "
-        "border-radius: 999px; padding: 6px 12px; font-weight: 700;"
+        "border-radius: 999px; padding: 8px 14px; font-weight: 700; min-width: 84px;"
     )
 
 
 def neutral_badge_style() -> str:
     return (
         "background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; "
-        "border-radius: 999px; padding: 6px 12px; font-weight: 700;"
+        "border-radius: 999px; padding: 8px 14px; font-weight: 700; min-width: 84px;"
     )

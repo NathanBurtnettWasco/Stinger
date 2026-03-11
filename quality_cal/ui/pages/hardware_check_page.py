@@ -5,7 +5,6 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -37,7 +36,6 @@ class HardwareCheckPage(QWizardPage):
         outer_layout.setSpacing(18)
 
         container = QWidget(self)
-        container.setMaximumWidth(1040)
         layout = QVBoxLayout(container)
         layout.setSpacing(18)
 
@@ -73,9 +71,8 @@ class HardwareCheckPage(QWizardPage):
 
         layout.addWidget(header_card)
 
-        status_grid = QGridLayout()
-        status_grid.setHorizontalSpacing(16)
-        status_grid.setVerticalSpacing(16)
+        cards_layout = QVBoxLayout()
+        cards_layout.setSpacing(14)
 
         device_names = [
             "port_a LabJack",
@@ -87,19 +84,23 @@ class HardwareCheckPage(QWizardPage):
         for row, name in enumerate(device_names):
             card = QFrame(container)
             card.setProperty("card", True)
+            card.setMinimumHeight(120)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(20, 18, 20, 18)
-            card_layout.setSpacing(12)
+            card_layout.setContentsMargins(24, 20, 24, 20)
+            card_layout.setSpacing(14)
 
             top_row = QHBoxLayout()
             top_row.setSpacing(12)
+            top_row.setContentsMargins(0, 0, 0, 0)
             name_label = QLabel(name.replace("port_a", "Left").replace("port_b", "Right"))
-            name_label.setStyleSheet("font-size: 12pt; font-weight: 700; color: #0f172a;")
+            name_label.setStyleSheet("font-size: 13pt; font-weight: 700; color: #0f172a;")
+            name_label.setWordWrap(True)
             top_row.addWidget(name_label, 1)
 
             status_label = QLabel("Checking")
             status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             status_label.setStyleSheet(neutral_badge_style())
+            status_label.setMinimumWidth(112)
             top_row.addWidget(status_label, 0)
             self._status_labels[name] = status_label
 
@@ -107,24 +108,22 @@ class HardwareCheckPage(QWizardPage):
 
             detail_label = QLabel("Waiting for the first hardware refresh.")
             detail_label.setWordWrap(True)
-            detail_label.setStyleSheet("font-size: 10.5pt; color: #475569; line-height: 1.45;")
+            detail_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            detail_label.setStyleSheet(
+                "font-size: 11pt; color: #475569; line-height: 1.45; padding-top: 2px;"
+            )
             card_layout.addWidget(detail_label)
             self._detail_labels[name] = detail_label
             self._card_frames[name] = card
 
-            if name == "Mensor":
-                status_grid.addWidget(card, 2, 0, 1, 2)
-            elif row < 2:
-                status_grid.addWidget(card, 0, row)
-            else:
-                status_grid.addWidget(card, 1, row - 2)
+            cards_layout.addWidget(card)
 
-        layout.addLayout(status_grid)
+        layout.addLayout(cards_layout)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.run_button = QPushButton("Refresh Now")
-        self.run_button.setMinimumSize(240, 56)
+        self.run_button.setMinimumSize(280, 62)
         self.run_button.clicked.connect(self._start_check)
         button_row.addWidget(self.run_button)
         button_row.addStretch(1)

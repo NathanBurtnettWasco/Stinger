@@ -8,6 +8,7 @@ Handles:
 """
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -16,6 +17,33 @@ from typing import Any, Dict, Optional
 from app.services.pressure_calibration import apply_error_model, build_legacy_two_band_model
 
 logger = logging.getLogger(__name__)
+
+
+def _prime_labjack_dll_search_path() -> None:
+    """Help Python locate LabJackM.dll before importing labjack.ljm."""
+    candidate_dirs = [
+        r"C:\Windows\System32",
+        r"C:\Program Files\LabJack\Drivers",
+        r"C:\Program Files (x86)\LabJack\Drivers",
+    ]
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    updated = False
+    for directory in candidate_dirs:
+        if not os.path.isdir(directory):
+            continue
+        try:
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(directory)
+        except Exception:
+            pass
+        if directory not in path_entries:
+            path_entries.insert(0, directory)
+            updated = True
+    if updated:
+        os.environ["PATH"] = os.pathsep.join(path_entries)
+
+
+_prime_labjack_dll_search_path()
 
 ljm: Any = None
 LJM_IMPORT_ERROR: Optional[str] = None
