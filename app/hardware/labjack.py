@@ -50,8 +50,10 @@ LJM_IMPORT_ERROR: Optional[str] = None
 LJM_NATIVE_LIB_LOADED = False
 try:
     from labjack import ljm as _ljm
+    import labjack.ljm.ljm as _ljm_native
+
     ljm = _ljm
-    LJM_NATIVE_LIB_LOADED = getattr(_ljm, '_staticLib', None) is not None
+    LJM_NATIVE_LIB_LOADED = getattr(_ljm_native, '_staticLib', None) is not None
     LJM_AVAILABLE = bool(LJM_NATIVE_LIB_LOADED)
     if not LJM_AVAILABLE:
         LJM_IMPORT_ERROR = (
