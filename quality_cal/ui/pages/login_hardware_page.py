@@ -1,12 +1,15 @@
-"""Hardware-check page for the quality calibration wizard."""
+"""Combined setup + hardware check: login/session on the left, hardware status on the right."""
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QFrame,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -15,9 +18,13 @@ from PyQt6.QtWidgets import (
 )
 
 from app.services import run_async
-from quality_cal.ui.styles import COLORS, TYPOGRAPHY, neutral_badge_style, status_badge_style
+from quality_cal.ui.styles import (
+    COLORS,
+    TYPOGRAPHY,
+    neutral_badge_style,
+    status_badge_style,
+)
 
-# Base card style (no accent); accent applied in _done via _card_accent_style
 _CARD_BASE = (
     f"QFrame {{ background: {COLORS['bg_surface_1']}; "
     f"border: 1px solid {COLORS['border_subtle']}; "
@@ -28,7 +35,6 @@ _CARD_BASE = (
 
 
 def _card_accent_style(ok: bool) -> str:
-    """Card style with green (ok) or red (fail) left border accent."""
     accent = COLORS["success"] if ok else COLORS["danger"]
     return (
         f"QFrame {{ background: {COLORS['bg_surface_1']}; "
@@ -39,11 +45,13 @@ def _card_accent_style(ok: bool) -> str:
     )
 
 
-class HardwareCheckPage(QWizardPage):
+class LoginHardwarePage(QWizardPage):
+    """Single page: session details (left column), hardware check (right column)."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setTitle("Hardware Check")
-        self.setSubTitle("Verify both ports and the Mensor before starting calibration.")
+        self.setTitle("Setup & Hardware")
+        self.setSubTitle("Enter session details and verify hardware before continuing.")
         self._refresh_in_progress = False
         self._check_passed = False
         self._has_completed_refresh = False
@@ -53,34 +61,97 @@ class HardwareCheckPage(QWizardPage):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._start_check)
 
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(20, 12, 20, 20)
-        outer_layout.setSpacing(18)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(20, 12, 20, 20)
+        outer.setSpacing(24)
 
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # —— Left column: Login / session ——
+        left_scroll = QScrollArea(self)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setMaximumWidth(420)
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setSpacing(18)
 
-        container = QWidget()
-        container.setMaximumWidth(1080)
-        layout = QVBoxLayout(container)
-        layout.setSpacing(18)
+        form_card = QFrame(left_widget)
+        form_card.setProperty("card", True)
+        form_layout = QVBoxLayout(form_card)
+        form_layout.setContentsMargins(24, 24, 24, 24)
+        form_layout.setSpacing(18)
 
-        header_card = QFrame(container)
+        form_title = QLabel("Session details")
+        form_title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; {TYPOGRAPHY['title']} font-weight: bold;"
+        )
+        form_layout.addWidget(form_title)
+
+        form_intro = QLabel(
+            "Enter technician and asset information for this calibration run."
+        )
+        form_intro.setWordWrap(True)
+        form_intro.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; {TYPOGRAPHY['body']}"
+        )
+        form_layout.addWidget(form_intro)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(16)
+
+        self.technician_input = QLineEdit()
+        self.technician_input.setPlaceholderText("Enter your name")
+        self.technician_input.setMinimumHeight(44)
+        self.technician_input.textChanged.connect(lambda: self.completeChanged.emit())
+        form.addRow("Technician:", self.technician_input)
+
+        self.asset_id_input = QLineEdit("222")
+        self.asset_id_input.setPlaceholderText("Asset ID")
+        self.asset_id_input.setMinimumHeight(44)
+        self.asset_id_input.setMaximumWidth(220)
+        self.asset_id_input.textChanged.connect(lambda: self.completeChanged.emit())
+        form.addRow("Asset ID:", self.asset_id_input)
+
+        self.include_leak_check_checkbox = QCheckBox("Include port leak check")
+        self.include_leak_check_checkbox.setChecked(False)
+        form.addRow("", self.include_leak_check_checkbox)
+
+        form_layout.addLayout(form)
+
+        note = QLabel(
+            "From the final report page you can save PDF, export CSV data for quality, or print—each to your chosen location."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"color: {COLORS['muted']}; {TYPOGRAPHY['caption']}; margin-top: 8px;"
+        )
+        form_layout.addWidget(note)
+        left_layout.addWidget(form_card)
+        left_layout.addStretch(1)
+        left_scroll.setWidget(left_widget)
+        outer.addWidget(left_scroll, 0)
+
+        # —— Right column: Hardware check ——
+        right_scroll = QScrollArea(self)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setMaximumWidth(440)
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setSpacing(14)
+
+        header_card = QFrame(right_widget)
         header_card.setProperty("card", True)
         header_layout = QVBoxLayout(header_card)
-        header_layout.setContentsMargins(24, 24, 24, 24)
-        header_layout.setSpacing(12)
+        header_layout.setContentsMargins(20, 20, 20, 20)
+        header_layout.setSpacing(8)
 
         eyebrow = QLabel("HARDWARE HEALTH")
         eyebrow.setProperty("role", "eyebrow")
         header_layout.addWidget(eyebrow)
-
-        title = QLabel("Live readiness view for both ports and the Mensor.")
-        title.setProperty("role", "heroTitle")
-        title.setWordWrap(True)
-        header_layout.addWidget(title)
 
         self.status_label = QLabel("Ready to verify hardware.")
         self.status_label.setWordWrap(True)
@@ -90,7 +161,7 @@ class HardwareCheckPage(QWizardPage):
         header_layout.addWidget(self.status_label)
 
         self.summary_label = QLabel(
-            "Auto-refresh checks every few seconds while this page is open."
+            "Auto-refresh runs every few seconds. Use Refresh Now to re-detect."
         )
         self.summary_label.setWordWrap(True)
         self.summary_label.setStyleSheet(
@@ -98,19 +169,14 @@ class HardwareCheckPage(QWizardPage):
         )
         header_layout.addWidget(self.summary_label)
 
-        self.discovery_label = QLabel(
-            "Discovery diagnostics will appear here during the first refresh."
-        )
+        self.discovery_label = QLabel("First refresh will show discovery details.")
         self.discovery_label.setWordWrap(True)
         self.discovery_label.setStyleSheet(
             f"color: {COLORS['muted']}; {TYPOGRAPHY['caption']}"
         )
         header_layout.addWidget(self.discovery_label)
 
-        layout.addWidget(header_card)
-
-        cards_layout = QVBoxLayout()
-        cards_layout.setSpacing(14)
+        right_layout.addWidget(header_card)
 
         device_names = [
             "port_a LabJack",
@@ -119,15 +185,14 @@ class HardwareCheckPage(QWizardPage):
             "port_b Alicat",
             "Mensor",
         ]
-        for row, name in enumerate(device_names):
-            card = QFrame(container)
+        for name in device_names:
+            card = QFrame(right_widget)
             card.setStyleSheet(_CARD_BASE)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(24, 20, 24, 20)
-            card_layout.setSpacing(14)
+            card_layout.setContentsMargins(20, 16, 20, 16)
+            card_layout.setSpacing(10)
 
             top_row = QHBoxLayout()
-            top_row.setSpacing(12)
             top_row.setContentsMargins(0, 0, 0, 0)
             name_label = QLabel(
                 name.replace("port_a", "Left").replace("port_b", "Right")
@@ -141,13 +206,13 @@ class HardwareCheckPage(QWizardPage):
             status_label = QLabel("Checking")
             status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             status_label.setStyleSheet(neutral_badge_style())
-            status_label.setMinimumWidth(112)
+            status_label.setMinimumWidth(90)
             top_row.addWidget(status_label, 0)
             self._status_labels[name] = status_label
 
             card_layout.addLayout(top_row)
 
-            detail_label = QLabel("Waiting for the first hardware refresh.")
+            detail_label = QLabel("Waiting for first refresh.")
             detail_label.setWordWrap(True)
             detail_label.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
@@ -158,26 +223,27 @@ class HardwareCheckPage(QWizardPage):
             card_layout.addWidget(detail_label)
             self._detail_labels[name] = detail_label
             self._card_frames[name] = card
+            right_layout.addWidget(card)
 
-            cards_layout.addWidget(card)
-
-        layout.addLayout(cards_layout)
-
-        button_row = QHBoxLayout()
-        button_row.addStretch(1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
         self.run_button = QPushButton("Refresh Now")
-        self.run_button.setMinimumSize(280, 62)
+        self.run_button.setMinimumSize(200, 48)
         self.run_button.clicked.connect(self._retry_check)
-        button_row.addWidget(self.run_button)
-        button_row.addStretch(1)
-        layout.addLayout(button_row)
+        btn_row.addWidget(self.run_button)
+        btn_row.addStretch(1)
+        right_layout.addLayout(btn_row)
 
-        scroll.setWidget(container)
-        outer_layout.addWidget(scroll)
+        right_scroll.setWidget(right_widget)
+        outer.addWidget(right_scroll, 1)
+
+        self.registerField("technician_name*", self.technician_input)
+        self.registerField("asset_id*", self.asset_id_input)
+        self.registerField("include_leak_check", self.include_leak_check_checkbox)
 
     def initializePage(self) -> None:
         wizard = self.wizard()
-        interval_ms = wizard.hardware_check_poll_interval_ms() if wizard is not None else 2000
+        interval_ms = wizard.hardware_check_poll_interval_ms() if wizard else 2000
         self._poll_timer.start(interval_ms)
         self._start_check()
 
@@ -185,7 +251,19 @@ class HardwareCheckPage(QWizardPage):
         self._poll_timer.stop()
 
     def isComplete(self) -> bool:
-        return self._check_passed
+        login_ok = bool(self.technician_input.text().strip()) and bool(
+            self.asset_id_input.text().strip()
+        )
+        return login_ok and self._check_passed
+
+    def validatePage(self) -> bool:
+        wizard = self.wizard()
+        if wizard is not None:
+            wizard.session.technician_name = self.technician_input.text().strip()
+            wizard.session.asset_id = self.asset_id_input.text().strip()
+            wizard.session.include_leak_check = self.include_leak_check_checkbox.isChecked()
+            wizard.session.begin()
+        return super().validatePage()
 
     def _start_check(self) -> None:
         if self._refresh_in_progress:
@@ -202,14 +280,10 @@ class HardwareCheckPage(QWizardPage):
                     card_frame.setStyleSheet(_CARD_BASE)
         else:
             self.status_label.setText("Refreshing hardware status...")
-            if self._check_passed:
-                self.status_label.setStyleSheet(
-                    f"color: {COLORS['success']}; {TYPOGRAPHY['subtitle']} font-weight: bold;"
-                )
-            else:
-                self.status_label.setStyleSheet(
-                    f"color: {COLORS['danger']}; {TYPOGRAPHY['subtitle']} font-weight: bold;"
-                )
+            self.status_label.setStyleSheet(
+                f"color: {COLORS['success'] if self._check_passed else COLORS['danger']}; "
+                f"{TYPOGRAPHY['subtitle']} font-weight: bold;"
+            )
 
         wizard = self.wizard()
         if wizard is None:
@@ -259,7 +333,7 @@ class HardwareCheckPage(QWizardPage):
                 )
             else:
                 self.status_label.setText(
-                    "Hardware check incomplete. Review the cards below."
+                    "Hardware check incomplete. Review the cards and use Refresh Now."
                 )
                 self.status_label.setStyleSheet(
                     f"color: {COLORS['danger']}; {TYPOGRAPHY['subtitle']} font-weight: bold;"

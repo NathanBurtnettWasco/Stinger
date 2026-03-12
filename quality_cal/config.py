@@ -78,13 +78,13 @@ def build_pressure_points(quality_cfg: dict[str, Any]) -> list[float]:
         return _normalize_points(points)
 
     schedule_cfg = quality_cfg.get("pressure_schedule", {}) or {}
-    max_psia = _coerce_float(schedule_cfg.get("max_psia", 115.0))
+    max_psia = _coerce_float(schedule_cfg.get("max_psia", 30.0))
     dense_up_to = _coerce_float(schedule_cfg.get("dense_up_to_psia", 30.0))
     dense_step = _coerce_float(schedule_cfg.get("dense_step_psia", 1.0))
-    medium_up_to = _coerce_float(schedule_cfg.get("medium_up_to_psia", 60.0))
+    medium_up_to = _coerce_float(schedule_cfg.get("medium_up_to_psia", 30.0))
     medium_step = _coerce_float(schedule_cfg.get("medium_step_psia", 2.0))
     high_step = _coerce_float(schedule_cfg.get("high_step_psia", 5.0))
-    start_psia = _coerce_float(schedule_cfg.get("start_psia", 1.0))
+    start_psia = _coerce_float(schedule_cfg.get("start_psia", 0.0))
 
     points: list[float] = []
     points.extend(_build_range(start_psia, dense_up_to, dense_step))
@@ -115,7 +115,7 @@ def parse_quality_settings(config: dict[str, Any]) -> QualitySettings:
 
     return QualitySettings(
         pressure_points_psia=build_pressure_points(quality_cfg),
-        pressure_tolerance_psia=_coerce_float(quality_cfg.get("pressure_tolerance_psia", 0.5)),
+        pressure_tolerance_psia=_coerce_float(quality_cfg.get("pressure_tolerance_psia", 0.06)),
         settle_tolerance_psia=_coerce_float(quality_cfg.get("settle_tolerance_psia", 0.4)),
         settle_hold_s=_coerce_float(quality_cfg.get("settle_hold_s", 5.0)),
         settle_timeout_s=_coerce_float(quality_cfg.get("settle_timeout_s", 180.0)),

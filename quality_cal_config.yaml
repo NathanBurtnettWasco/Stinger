@@ -88,14 +88,14 @@ quality:
       - "COM9"
       - "COM10"
   pressure_schedule:
-    start_psia: 1.0
+    start_psia: 0.0
     dense_up_to_psia: 30.0
     dense_step_psia: 1.0
-    medium_up_to_psia: 60.0
+    medium_up_to_psia: 30.0
     medium_step_psia: 2.0
-    max_psia: 115.0
+    max_psia: 30.0
     high_step_psia: 5.0
-  pressure_tolerance_psia: 0.5
+  pressure_tolerance_psia: 0.06
   settle_tolerance_psia: 0.4
   settle_hold_s: 5.0
   settle_timeout_s: 180.0

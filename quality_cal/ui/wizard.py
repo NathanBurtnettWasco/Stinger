@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox, QWizard
+
+from quality_cal.ui.styles import APP_STYLESHEET
 
 from app.hardware.port import PortManager
 from quality_cal.config import QualitySettings
@@ -18,15 +21,14 @@ from quality_cal.core.mensor_reader import MensorReader
 from quality_cal.session import QualityCalibrationSession
 from quality_cal.ui.pages.calibration_run_page import CalibrationRunPage
 from quality_cal.ui.pages.confirm_port_page import ConfirmPortPage
-from quality_cal.ui.pages.hardware_check_page import HardwareCheckPage
 from quality_cal.ui.pages.leak_check_page import LeakCheckPage
-from quality_cal.ui.pages.login_page import LoginPage
+from quality_cal.ui.pages.login_hardware_page import LoginHardwarePage
 from quality_cal.ui.pages.report_page import ReportPage
 
 logger = logging.getLogger(__name__)
 
 
-class _HardwareCheckPage(HardwareCheckPage):
+class _SetupAndHardwarePage(LoginHardwarePage):
     def nextId(self) -> int:
         wizard = self.wizard()
         if wizard is None:
@@ -67,15 +69,14 @@ class _CalRightPage(CalibrationRunPage):
 
 
 class QualityCalibrationWizard(QWizard):
-    PAGE_LOGIN = 0
-    PAGE_HARDWARE = 1
-    PAGE_LEAK_LEFT = 2
-    PAGE_LEAK_RIGHT = 3
-    PAGE_CONFIRM_LEFT = 4
-    PAGE_CAL_LEFT = 5
-    PAGE_CONFIRM_RIGHT = 6
-    PAGE_CAL_RIGHT = 7
-    PAGE_REPORT = 8
+    PAGE_SETUP_AND_HARDWARE = 0
+    PAGE_LEAK_LEFT = 1
+    PAGE_LEAK_RIGHT = 2
+    PAGE_CONFIRM_LEFT = 3
+    PAGE_CAL_LEFT = 4
+    PAGE_CONFIRM_RIGHT = 5
+    PAGE_CAL_RIGHT = 6
+    PAGE_REPORT = 7
 
     def __init__(self, *, config: dict, settings: QualitySettings, parent=None) -> None:
         super().__init__(parent)
@@ -85,17 +86,26 @@ class QualityCalibrationWizard(QWizard):
         self.port_manager: Optional[PortManager] = None
         self.mensor_reader: Optional[MensorReader] = None
         self._labjack_probe_detail = "LabJack discovery not yet run."
+        self._discovery_applied = False
 
         self.setWindowTitle("Quality Calibration")
         self.setMinimumSize(1100, 800)
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.setStyleSheet(APP_STYLESHEET)
 
         self._create_pages()
         self.finished.connect(self._on_finished)
+        QTimer.singleShot(0, self._style_wizard_buttons)
+
+    def _style_wizard_buttons(self) -> None:
+        """Apply primary style to Next/Finish so they match the design system."""
+        for role in (QWizard.WizardButton.NextButton, QWizard.WizardButton.FinishButton):
+            btn = self.button(role)
+            if btn is not None:
+                btn.setObjectName("primaryButton")
 
     def _create_pages(self) -> None:
-        self.setPage(self.PAGE_LOGIN, LoginPage(self))
-        self.setPage(self.PAGE_HARDWARE, _HardwareCheckPage(self))
+        self.setPage(self.PAGE_SETUP_AND_HARDWARE, _SetupAndHardwarePage(self))
         self.setPage(
             self.PAGE_LEAK_LEFT,
             _LeakCheckLeftPage(port_id="port_a", title="Leak Check - Left Port", parent=self),
@@ -143,6 +153,9 @@ class QualityCalibrationWizard(QWizard):
         return bool(discovery_cfg.get("enable_serial_auto_discovery", True))
 
     def _apply_discovered_hardware_assignments(self) -> None:
+        if self._discovery_applied:
+            return
+
         hardware_cfg = self.config.setdefault("hardware", {})
         labjack_cfg = hardware_cfg.setdefault("labjack", {})
         alicat_cfg = hardware_cfg.setdefault("alicat", {})
@@ -168,7 +181,6 @@ class QualityCalibrationWizard(QWizard):
             if str(labjack_cfg.get("identifier", "")).strip() != desired_identifier:
                 labjack_cfg["identifier"] = desired_identifier
                 changed = True
-
         if self.serial_auto_discovery_enabled():
             discovered_alicats = discover_alicat_assignments(self.config)
             for logical_port, discovered_port in discovered_alicats.items():
@@ -183,7 +195,13 @@ class QualityCalibrationWizard(QWizard):
                     target_cfg["com_port"] = discovered_port
                     changed = True
 
-            discovered_mensor = discover_mensor_port(self.config)
+            discovered_mensor = discover_mensor_port(
+                self.config,
+                exclude_ports={
+                    str(port_a_cfg.get("com_port", "")).strip(),
+                    str(port_b_cfg.get("com_port", "")).strip(),
+                },
+            )
             if discovered_mensor and str(mensor_cfg.get("port", "")).strip() != discovered_mensor:
                 logger.info(
                     "Updating Mensor COM port from %s to %s",
@@ -195,6 +213,7 @@ class QualityCalibrationWizard(QWizard):
 
         if changed:
             self.cleanup_hardware()
+        self._discovery_applied = True
 
     def get_hardware_snapshot(self) -> dict[str, Any]:
         self._apply_discovered_hardware_assignments()
@@ -226,27 +245,54 @@ class QualityCalibrationWizard(QWizard):
 
             labjack_status = port.daq.get_status()
             transducer_reading = port.daq.read_transducer()
-            if transducer_reading is None and not bool(labjack_status.get("configured", False)):
+            driver_loaded = bool(labjack_status.get("driver_loaded", False))
+            simulated = bool(labjack_status.get("simulated", False))
+            if (
+                driver_loaded
+                and transducer_reading is None
+                and not bool(labjack_status.get("configured", False))
+            ):
                 port.daq.configure()
                 labjack_status = port.daq.get_status()
                 transducer_reading = port.daq.read_transducer()
-            labjack_ok = transducer_reading is not None
+                driver_loaded = bool(labjack_status.get("driver_loaded", False))
+                simulated = bool(labjack_status.get("simulated", False))
+            labjack_ok = transducer_reading is not None and driver_loaded and not simulated
             if not labjack_ok:
                 overall_ok = False
+            if not driver_loaded:
+                labjack_detail = (
+                    f"{labjack_status.get('status', 'Unknown')} | "
+                    f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
+                    f"{labjack_status.get('identifier')} | "
+                    "LabJack driver missing: install the LabJack LJM driver to read the transducer "
+                    "and switch the solenoid."
+                )
+            elif simulated:
+                labjack_detail = (
+                    f"{labjack_status.get('status', 'Unknown')} | "
+                    f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
+                    f"{labjack_status.get('identifier')} | "
+                    "Simulated only: solenoid and transducer control are not live."
+                )
+            elif transducer_reading is None:
+                labjack_detail = (
+                    f"{labjack_status.get('status', 'Unknown')} | "
+                    f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
+                    f"{labjack_status.get('identifier')} | {self._labjack_probe_detail}"
+                )
+            else:
+                labjack_detail = (
+                    f"{labjack_status.get('status', 'Unknown')} | "
+                    f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
+                    f"{labjack_status.get('identifier')} | "
+                    f"Transducer={transducer_reading.pressure:.3f} psia"
+                )
             entries.append(
                 {
                     "name": f"{port_id} LabJack",
                     "ok": labjack_ok,
-                    "detail": (
-                        f"{labjack_status.get('status', 'Unknown')} | "
-                        f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
-                        f"{labjack_status.get('identifier')} | {self._labjack_probe_detail}"
-                        if transducer_reading is None
-                        else f"{labjack_status.get('status', 'Unknown')} | "
-                        f"Target={labjack_status.get('device_type')}/{labjack_status.get('connection_type')}/"
-                        f"{labjack_status.get('identifier')} | "
-                        f"Transducer={transducer_reading.pressure:.3f} psia"
-                    ),
+                    "detail": labjack_detail,
                 }
             )
 
@@ -278,22 +324,15 @@ class QualityCalibrationWizard(QWizard):
         mensor_ok = False
         mensor_detail = self.mensor_reader.status if self.mensor_reader is not None else "Not initialized"
         if self.mensor_reader is not None:
-            try:
-                mensor = self.mensor_reader.read_pressure()
-                mensor_ok = True
-                mensor_detail = f"{self.mensor_reader.status} | Pressure={mensor.pressure_psia:.3f} psia"
-            except Exception as exc:
-                reconnect_ok = self.mensor_reader.connect()
-                if reconnect_ok:
-                    try:
-                        mensor = self.mensor_reader.read_pressure()
-                        mensor_ok = True
-                        mensor_detail = (
-                            f"{self.mensor_reader.status} | Pressure={mensor.pressure_psia:.3f} psia"
-                        )
-                    except Exception as reconnect_exc:
-                        mensor_detail = f"{self.mensor_reader.status} | Read failed: {reconnect_exc}"
-                else:
+            if self.mensor_reader.status in {"Connected", "Connected (simulated)"}:
+                try:
+                    mensor = self.mensor_reader.read_pressure()
+                    mensor_ok = True
+                    mensor_detail = f"{self.mensor_reader.status} | Pressure={mensor.pressure_psia:.3f} psia"
+                    # Flag obviously out-of-range readings so operator can verify sensor
+                    if not (0.0 <= mensor.pressure_psia <= 300.0):
+                        mensor_detail += " (unusual reading — verify sensor)"
+                except Exception as exc:
                     mensor_detail = f"{self.mensor_reader.status} | Read failed: {exc}"
         if not mensor_ok:
             overall_ok = False
@@ -320,6 +359,7 @@ class QualityCalibrationWizard(QWizard):
         if self.port_manager is not None:
             self.port_manager.disconnect_all()
             self.port_manager = None
+        self._discovery_applied = False
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.currentId() != self.PAGE_REPORT:

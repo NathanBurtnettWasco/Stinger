@@ -7,13 +7,15 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
     QWizardPage,
 )
+
+from quality_cal.ui.styles import COLORS, TYPOGRAPHY
 
 
 class LoginPage(QWizardPage):
@@ -25,10 +27,15 @@ class LoginPage(QWizardPage):
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(20, 12, 20, 20)
 
-        container = QWidget(self)
-        container.setMaximumWidth(1040)
-        layout = QHBoxLayout(container)
-        layout.setSpacing(18)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        container.setMaximumWidth(980)
+        main_layout = QVBoxLayout(container)
+        main_layout.setSpacing(24)
 
         overview_card = QFrame(container)
         overview_card.setProperty("card", True)
@@ -59,7 +66,9 @@ class LoginPage(QWizardPage):
         steps_layout.setContentsMargins(18, 18, 18, 18)
         steps_layout.setSpacing(10)
         steps_heading = QLabel("What happens next")
-        steps_heading.setStyleSheet("font-size: 12pt; font-weight: 700; color: #0f172a;")
+        steps_heading.setStyleSheet(
+            f"color: {COLORS['text_primary']}; {TYPOGRAPHY['subtitle']} font-weight: bold;"
+        )
         steps_layout.addWidget(steps_heading)
         steps_copy = QLabel(
             "1. Verify both Alicats, the LabJack, and the Mensor.\n"
@@ -68,30 +77,35 @@ class LoginPage(QWizardPage):
             "4. Save or print the final report."
         )
         steps_copy.setWordWrap(True)
-        steps_copy.setStyleSheet("color: #475569; line-height: 1.5;")
+        steps_copy.setStyleSheet(f"color: {COLORS['text_secondary']}; {TYPOGRAPHY['body']}")
         steps_layout.addWidget(steps_copy)
         overview_layout.addWidget(steps_panel)
-        overview_layout.addStretch(1)
+
+        main_layout.addWidget(overview_card)
 
         form_card = QFrame(container)
         form_card.setProperty("card", True)
         form_layout = QVBoxLayout(form_card)
         form_layout.setContentsMargins(28, 28, 28, 28)
-        form_layout.setSpacing(18)
+        form_layout.setSpacing(22)
 
         form_title = QLabel("Session details")
-        form_title.setStyleSheet("font-size: 16pt; font-weight: 700; color: #0f172a;")
+        form_title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; {TYPOGRAPHY['title']} font-weight: bold;"
+        )
         form_layout.addWidget(form_title)
 
-        form_intro = QLabel("Enter the technician and asset information for this calibration run.")
+        form_intro = QLabel(
+            "Enter the technician and asset information for this calibration run."
+        )
         form_intro.setWordWrap(True)
-        form_intro.setStyleSheet("color: #475569;")
+        form_intro.setStyleSheet(f"color: {COLORS['text_secondary']}; {TYPOGRAPHY['body']}")
         form_layout.addWidget(form_intro)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(16)
+        form.setVerticalSpacing(20)
 
         self.technician_input = QLineEdit()
         self.technician_input.setPlaceholderText("Enter your name")
@@ -102,7 +116,7 @@ class LoginPage(QWizardPage):
         self.asset_id_input = QLineEdit("222")
         self.asset_id_input.setPlaceholderText("Asset ID")
         self.asset_id_input.setMinimumHeight(54)
-        self.asset_id_input.setMaximumWidth(240)
+        self.asset_id_input.setMaximumWidth(280)
         self.asset_id_input.textChanged.connect(lambda: self.completeChanged.emit())
         form.addRow("Asset ID:", self.asset_id_input)
 
@@ -119,27 +133,31 @@ class LoginPage(QWizardPage):
         note_layout.setContentsMargins(16, 16, 16, 16)
         note_layout.setSpacing(6)
         note_title = QLabel("Report output")
-        note_title.setStyleSheet("font-weight: 700; color: #0f172a;")
+        note_title.setStyleSheet(f"font-weight: bold; color: {COLORS['text_primary']};")
         note_body = QLabel(
-            "Reports are exported to the calibration certificate folder using the configured naming template."
+            "Reports are exported to the calibration certificate folder using the "
+            "configured naming template."
         )
         note_body.setWordWrap(True)
-        note_body.setStyleSheet("color: #475569;")
+        note_body.setStyleSheet(f"color: {COLORS['text_secondary']}; {TYPOGRAPHY['body']}")
         note_layout.addWidget(note_title)
         note_layout.addWidget(note_body)
         form_layout.addWidget(note_panel)
-        form_layout.addStretch(1)
 
-        layout.addWidget(overview_card, 6)
-        layout.addWidget(form_card, 5)
-        outer_layout.addWidget(container, alignment=Qt.AlignmentFlag.AlignHCenter)
+        main_layout.addWidget(form_card)
+        main_layout.addStretch(1)
+
+        scroll.setWidget(container)
+        outer_layout.addWidget(scroll)
 
         self.registerField("technician_name*", self.technician_input)
         self.registerField("asset_id*", self.asset_id_input)
         self.registerField("include_leak_check", self.include_leak_check_checkbox)
 
     def isComplete(self) -> bool:
-        return bool(self.technician_input.text().strip()) and bool(self.asset_id_input.text().strip())
+        return bool(self.technician_input.text().strip()) and bool(
+            self.asset_id_input.text().strip()
+        )
 
     def validatePage(self) -> bool:
         wizard = self.wizard()

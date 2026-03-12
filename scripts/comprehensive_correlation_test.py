@@ -392,6 +392,40 @@ def _run_one_port(
     return output_file
 
 
+def run_collect(
+    ports: List[str],
+    sample_rate: float = 50.0,
+    output_dir: str | Path = 'scripts/data',
+    auto_start: bool = False,
+) -> List[Path]:
+    """Run correlation test for given ports; return list of saved CSV paths."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime('%Y%m%d_%H%M%S')
+    config = load_config()
+    segments = design_test_sequence()
+
+    print(f"Test design: {len(segments)} segments")
+    estimated_time = sum(s.duration + s.settle_time for s in segments) * len(ports)
+    print(f"Estimated duration: {estimated_time/60:.1f} minutes")
+    print(f"Transducer: raw (no filter, offset=0) for calibration")
+    print(f"Ports: {', '.join(ports)}")
+
+    if not auto_start:
+        input("Press Enter to start test...")
+
+    saved_files: List[Path] = []
+    for port in ports:
+        print(f"\n{'#'*60}\n# {port}\n{'#'*60}")
+        path = _run_one_port(
+            config, port, segments, sample_rate,
+            output_dir, timestamp, use_raw=True, auto_start=auto_start,
+        )
+        if path:
+            saved_files.append(path)
+    return saved_files
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Comprehensive transducer-Alicat correlation test (raw data for calibration).'
@@ -405,30 +439,12 @@ def main():
     args = parser.parse_args()
 
     ports = ['port_a', 'port_b'] if args.both_ports else [args.port or 'port_a']
-    config = load_config()
-    segments = design_test_sequence()
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = time.strftime('%Y%m%d_%H%M%S')
-
-    print(f"Test design: {len(segments)} segments")
-    estimated_time = sum(s.duration + s.settle_time for s in segments) * len(ports)
-    print(f"Estimated duration: {estimated_time/60:.1f} minutes")
-    print(f"Transducer: raw (no filter, offset=0) for calibration")
-    print(f"Ports: {', '.join(ports)}")
-
-    if not args.auto_start:
-        input("Press Enter to start test...")
-
-    saved_files: List[Path] = []
-    for port in ports:
-        print(f"\n{'#'*60}\n# {port}\n{'#'*60}")
-        path = _run_one_port(
-            config, port, segments, args.sample_rate,
-            output_dir, timestamp, use_raw=True, auto_start=args.auto_start,
-        )
-        if path:
-            saved_files.append(path)
+    saved_files = run_collect(
+        ports=ports,
+        sample_rate=args.sample_rate,
+        output_dir=args.output_dir,
+        auto_start=args.auto_start,
+    )
 
     if not saved_files:
         print("No data saved (all ports failed).")

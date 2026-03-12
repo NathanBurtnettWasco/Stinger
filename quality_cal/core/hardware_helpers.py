@@ -105,7 +105,7 @@ def wait_until_near_target(
     timeout_s: float,
     sample_hz: float,
     cancel_event: threading.Event,
-    progress_callback: Optional[Callable[[str], None]],
+    progress_callback: Optional[Callable[[str, Optional[float], Optional[float]], None]],
 ) -> StabilizedReading:
     start = time.perf_counter()
     near_since: Optional[float] = None
@@ -127,7 +127,9 @@ def wait_until_near_target(
             error = abs(last_alicat - target_psia)
             if progress_callback is not None:
                 progress_callback(
-                    f"Settling at {target_psia:.1f} psia (Alicat {last_alicat:.3f} psia)"
+                    f"Settling at {target_psia:.1f} psia",
+                    last_alicat,
+                    last_transducer,
                 )
             if error <= tolerance_psia:
                 now = time.perf_counter()

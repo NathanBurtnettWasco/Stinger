@@ -1,99 +1,138 @@
-"""Shared styling helpers for the standalone quality calibration UI."""
+"""Shared styling for the quality calibration wizard. Uses main Stinger design system."""
 
 from __future__ import annotations
 
+from app.ui.styles import (
+    COLORS,
+    RADIUS,
+    STYLES,
+    TYPOGRAPHY,
+)
 
-APP_STYLESHEET = """
-QWidget {
-    background: #eef2f6;
-    color: #111827;
-    font-size: 11pt;
-}
-QWizard {
-    background: #eef2f6;
-}
-QLabel[role="eyebrow"] {
-    color: #2563eb;
-    font-size: 10pt;
+# Re-export for pages that need table_widget, progress_bar, card, etc.
+__all__ = [
+    "APP_STYLESHEET",
+    "COLORS",
+    "neutral_badge_style",
+    "status_badge_style",
+    "STYLES",
+]
+
+# Build wizard-wide stylesheet from shared palette so quality cal matches main Stinger
+APP_STYLESHEET = f"""
+QWidget {{
+    background: {COLORS['bg_surface_0']};
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['body']}
+}}
+QWizard {{
+    background: {COLORS['bg_surface_0']};
+}}
+QLabel[role="eyebrow"] {{
+    color: {COLORS['accent_blue']};
+    {TYPOGRAPHY['caption']}
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-}
-QLabel[role="heroTitle"] {
-    color: #0f172a;
-    font-size: 22pt;
+}}
+QLabel[role="heroTitle"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['headline']}
     font-weight: 700;
-}
-QLabel[role="heroBody"] {
-    color: #475569;
-    font-size: 11pt;
-    line-height: 1.45;
-}
-QFrame[card="true"] {
-    background: #ffffff;
-    border: 1px solid #d8e0e8;
-    border-radius: 18px;
-}
-QFrame[panel="soft"] {
-    background: #f8fafc;
-    border: 1px solid #dbe4ee;
-    border-radius: 16px;
-}
-QLineEdit {
-    background: #ffffff;
-    border: 1px solid #cbd5e1;
-    border-radius: 12px;
-    padding: 10px 14px;
-    font-size: 12pt;
-}
-QLineEdit:focus {
-    border: 2px solid #2563eb;
-    padding: 9px 13px;
-}
-QPushButton {
-    background: #e5e7eb;
-    color: #111827;
-    border: 1px solid #cbd5e1;
-    border-radius: 14px;
-    padding: 10px 18px;
-    font-size: 11pt;
-    font-weight: 700;
-}
-QPushButton:hover {
-    background: #dbe3ea;
-}
-QPushButton:pressed {
-    background: #cfd8e3;
-}
-QCheckBox {
+}}
+QLabel[role="heroBody"] {{
+    color: {COLORS['text_secondary']};
+    {TYPOGRAPHY['body']}
+}}
+QFrame[card="true"] {{
+    background: {COLORS['bg_surface_1']};
+    border: 1px solid {COLORS['border_subtle']};
+    border-radius: {RADIUS['large']};
+}}
+QFrame[panel="soft"] {{
+    background: {COLORS['bg_surface_2']};
+    border: 1px solid {COLORS['border_subtle']};
+    border-radius: {RADIUS['xlarge']};
+}}
+QLineEdit {{
+    background: {COLORS['bg_surface_1']};
+    color: {COLORS['text_primary']};
+    border: 1px solid {COLORS['border_muted']};
+    border-radius: {RADIUS['medium']};
+    padding: 8px 12px;
+    {TYPOGRAPHY['body']}
+}}
+QLineEdit:focus {{
+    border: 1px solid {COLORS['accent_blue']};
+}}
+QLineEdit:disabled {{
+    background: {COLORS['button_disabled']};
+    color: {COLORS['muted']};
+}}
+QPushButton {{
+    background: {COLORS['button_default']};
+    color: {COLORS['text_primary']};
+    border: 1px solid {COLORS['border_subtle']};
+    border-radius: {RADIUS['medium']};
+    padding: 8px 16px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background: {COLORS['button_hover']};
+    border: 1px solid {COLORS['border_muted']};
+}}
+QPushButton:pressed {{
+    background: {COLORS['button_active']};
+}}
+QPushButton:disabled {{
+    background: {COLORS['button_disabled']};
+    color: {COLORS['muted']};
+    opacity: 0.5;
+}}
+QPushButton#primaryButton {{
+    background: {COLORS['accent_blue']};
+    color: white;
+    border: 1px solid {COLORS['accent_blue_hover']};
+}}
+QPushButton#primaryButton:hover {{
+    background: {COLORS['accent_blue_hover']};
+}}
+QPushButton#primaryButton:pressed {{
+    background: {COLORS['accent_blue_active']};
+}}
+QCheckBox {{
     spacing: 10px;
-    color: #111827;
-    font-size: 11pt;
-}
-QCheckBox::indicator {
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['body']}
+}}
+QCheckBox::indicator {{
     width: 20px;
     height: 20px;
-}
+}}
+{STYLES['progress_bar']}
 """
 
 
 def status_badge_style(ok: bool) -> str:
+    """Pill-style badge for Ready (ok=True) or Check/Fail (ok=False). Uses shared COLORS."""
     if ok:
-        bg = "#dcfce7"
-        fg = "#166534"
-        border = "#86efac"
+        bg = COLORS["success_muted"]
+        fg = COLORS["success"]
+        border = COLORS["success"]
     else:
-        bg = "#fee2e2"
-        fg = "#b91c1c"
-        border = "#fca5a5"
+        bg = COLORS["danger_muted"]
+        fg = COLORS["danger"]
+        border = COLORS["danger"]
     return (
         f"background: {bg}; color: {fg}; border: 1px solid {border}; "
-        "border-radius: 999px; padding: 8px 14px; font-weight: 700; min-width: 84px;"
+        f"border-radius: {RADIUS['pill']}; padding: 8px 14px; font-weight: 700; min-width: 84px;"
     )
 
 
 def neutral_badge_style() -> str:
+    """Pill-style badge for neutral/checking state."""
     return (
-        "background: #e2e8f0; color: #475569; border: 1px solid #cbd5e1; "
-        "border-radius: 999px; padding: 8px 14px; font-weight: 700; min-width: 84px;"
+        f"background: {COLORS['bg_surface_2']}; color: {COLORS['muted']}; "
+        f"border: 1px solid {COLORS['border_muted']}; "
+        f"border-radius: {RADIUS['pill']}; padding: 8px 14px; font-weight: 700; min-width: 84px;"
     )

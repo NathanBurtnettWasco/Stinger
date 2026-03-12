@@ -30,6 +30,10 @@ def available_serial_ports() -> list[str]:
     return [entry["device"] for entry in AlicatController.list_available_ports()]
 
 
+def available_mensor_ports() -> list[str]:
+    return MensorReader.list_available_ports()
+
+
 def _ip_to_string(ip_value: Any) -> Optional[str]:
     ljm = getattr(labjack_module, "ljm", None)
     if not labjack_module.LJM_AVAILABLE or ljm is None:
@@ -250,11 +254,16 @@ def discover_alicat_assignments(config: dict[str, Any]) -> dict[str, str]:
     return assignments
 
 
-def discover_mensor_port(config: dict[str, Any]) -> Optional[str]:
+def discover_mensor_port(
+    config: dict[str, Any],
+    *,
+    exclude_ports: Optional[set[str]] = None,
+) -> Optional[str]:
     hardware_cfg = config.get("hardware", {})
     mensor_cfg = hardware_cfg.get("mensor", {}) or {}
     quality_cfg = config.get("quality", {})
     discovery_cfg = quality_cfg.get("hardware_discovery", {}) or {}
+    excluded = {str(port).strip() for port in (exclude_ports or set()) if str(port).strip()}
 
     configured_port = str(mensor_cfg.get("port", "")).strip()
     preferred_ports = [
@@ -263,10 +272,12 @@ def discover_mensor_port(config: dict[str, Any]) -> Optional[str]:
     candidate_ports = build_candidate_ports(
         [configured_port],
         preferred_ports,
-        available_serial_ports(),
+        available_mensor_ports(),
     )
 
     for candidate_port in candidate_ports:
+        if candidate_port in excluded:
+            continue
         probe_cfg = dict(mensor_cfg)
         probe_cfg["port"] = candidate_port
         reader = MensorReader(probe_cfg)

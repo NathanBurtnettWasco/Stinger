@@ -28,6 +28,9 @@ class MensorReading:
 class MensorReader:
     """Simple serial client for a Mensor pressure reference."""
 
+    # Keep last N raw responses for diagnostic logging (tail of readings).
+    _RESPONSE_TAIL_SIZE = 20
+
     def __init__(self, config: dict[str, Any]):
         self._config = config
         self._port = str(config.get("port", "COM10"))
@@ -35,10 +38,16 @@ class MensorReader:
         self._timeout_s = float(config.get("timeout_s", 1.0))
         self._serial = None
         self._last_status = "Not Connected"
+        self._response_tail: list[str] = []
 
     @property
     def status(self) -> str:
         return self._last_status
+
+    @property
+    def response_tail(self) -> list[str]:
+        """Last N raw serial responses for diagnostic logging."""
+        return list(self._response_tail)
 
     def connect(self) -> bool:
         if not SERIAL_AVAILABLE:
@@ -85,6 +94,13 @@ class MensorReader:
         pressure = self._parse_pressure(response)
         if pressure is None:
             raise RuntimeError("Mensor read_pressure failed")
+        # Log when reading is far from typical cal range (possible wrong field or unit)
+        if not (0.0 <= pressure <= 300.0):
+            logger.warning(
+                "Mensor raw response out of range: pressure=%.3f psia, response=%r",
+                pressure,
+                response[:200] if response else None,
+            )
         return MensorReading(pressure_psia=pressure, timestamp=time.time())
 
     def _send(self, command: str) -> Optional[str]:
@@ -96,6 +112,10 @@ class MensorReader:
             self._serial.flush()
             time.sleep(0.05)
             response = self._serial.read_all().decode(errors="ignore").strip()
+            if response:
+                self._response_tail.append(response)
+                if len(self._response_tail) > self._RESPONSE_TAIL_SIZE:
+                    self._response_tail.pop(0)
             return response or None
         except Exception as exc:  # pragma: no cover - hardware dependency
             logger.error("Mensor communication error: %s", exc)
@@ -105,7 +125,19 @@ class MensorReader:
     def _parse_pressure(response: Optional[str]) -> Optional[float]:
         if not response:
             return None
-        first_field = response.split(",")[0].strip()
+        fields = [f.strip() for f in response.split(",") if f.strip()]
+        # Device often sends pressure in a field like "E+1.09813E+01" (value in psia).
+        # Prefer that over the first field which can be another quantity (e.g. 0.159).
+        for field in fields:
+            if field.upper().startswith("E+") or field.upper().startswith("E-"):
+                try:
+                    value = float(field[2:].strip())
+                    if 0.1 <= value <= 300.0:
+                        return value
+                except ValueError:
+                    pass
+        # Fallback: first field as before.
+        first_field = fields[0] if fields else ""
         try:
             value = float(first_field)
         except ValueError:

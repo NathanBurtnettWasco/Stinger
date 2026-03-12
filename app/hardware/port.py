@@ -284,8 +284,9 @@ class Port:
         pressure can damage the pump.
         """
         if to_vacuum:
+            # Only open to vacuum when pressure is close to atm (pump blowout protection).
             threshold_psi = self._solenoid_config.get(
-                "safe_vacuum_switch_threshold_psi", 2.0
+                "safe_vacuum_switch_threshold_psi", 1.0
             )
             if threshold_psi is not None:
                 alicat_reading = self.alicat.read_status() or self._cached_alicat

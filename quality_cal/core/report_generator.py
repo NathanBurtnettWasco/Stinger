@@ -1,7 +1,9 @@
-"""HTML and PDF report generation for quality calibration results."""
+"""HTML, PDF, and CSV report generation for quality calibration results."""
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from PyQt6.QtGui import QTextDocument
 from PyQt6.QtPrintSupport import QPrinter
 
 from quality_cal.config import QualitySettings
-from quality_cal.session import PortCalibrationResult, QualityCalibrationSession
+from quality_cal.session import CalibrationPointResult, PortCalibrationResult, QualityCalibrationSession
 
 
 def build_report_html(session: QualityCalibrationSession, settings: QualitySettings) -> str:
@@ -85,6 +87,73 @@ def default_report_filename(session: QualityCalibrationSession, settings: Qualit
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     asset = "".join(char for char in session.asset_id if char.isalnum() or char in {"-", "_"})
     return f"{settings.report_filename_prefix}_Asset{asset}_{timestamp}.pdf"
+
+
+def default_csv_filename(session: QualityCalibrationSession, settings: QualitySettings) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    asset = "".join(char for char in session.asset_id if char.isalnum() or char in {"-", "_"})
+    return f"{settings.report_filename_prefix}_Asset{asset}_{timestamp}.csv"
+
+
+def build_report_csv(session: QualityCalibrationSession, _settings: QualitySettings) -> str:
+    """Build CSV content with session metadata and calibration data for quality use."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    started = (
+        session.started_at.strftime("%Y-%m-%d %H:%M:%S")
+        if session.started_at
+        else ""
+    )
+    completed = (
+        session.completed_at.strftime("%Y-%m-%d %H:%M:%S")
+        if session.completed_at
+        else ""
+    )
+    w.writerow(["Technician", session.technician_name or ""])
+    w.writerow(["Asset ID", session.asset_id or ""])
+    w.writerow(["Started", started])
+    w.writerow(["Completed", completed])
+    w.writerow(["Overall Result", "PASS" if session.overall_passed else "FAIL"])
+    w.writerow([])
+    w.writerow([
+        "Port", "Point", "Target (psia)", "Mensor (psia)", "Alicat (psia)",
+        "Transducer (psia)", "Deviation (psia)", "Result",
+    ])
+    for port in (session.left_port, session.right_port):
+        for point in port.points:
+            w.writerow(_point_row(port.port_label, point))
+    return out.getvalue()
+
+
+def _point_row(port_label: str, point: CalibrationPointResult) -> list:
+    return [
+        port_label,
+        f"{point.point_index}/{point.point_total}",
+        f"{point.target_psia:.4f}",
+        _csv_fmt(point.mensor_psia),
+        _csv_fmt(point.alicat_psia),
+        _csv_fmt(point.transducer_psia),
+        _csv_fmt(point.deviation_psia),
+        "PASS" if point.passed else "FAIL",
+    ]
+
+
+def _csv_fmt(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.4f}"
+
+
+def export_report_csv(
+    session: QualityCalibrationSession,
+    settings: QualitySettings,
+    output_path: Path,
+) -> Path:
+    """Write calibration data CSV to the given path."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    content = build_report_csv(session, settings)
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
 
 
 def _build_port_section(port_result: PortCalibrationResult, settings: QualitySettings) -> str:

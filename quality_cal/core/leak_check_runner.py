@@ -39,6 +39,7 @@ def compute_leak_rate_psi_per_min(samples: list[tuple[float, float]]) -> Optiona
 
 class LeakCheckRunner(QObject):
     progressChanged = pyqtSignal(int, str)
+    sampleData = pyqtSignal(float, float, float)  # elapsed_s, alicat_psia, transducer_psia
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
     cancelled = pyqtSignal()
@@ -80,7 +81,7 @@ class LeakCheckRunner(QObject):
                 timeout_s=self._settings.settle_timeout_s,
                 sample_hz=self._settings.leak_check_sample_hz,
                 cancel_event=self._cancel_event,
-                progress_callback=lambda message: self.progressChanged.emit(20, message),
+                progress_callback=lambda msg, _a, _t: self.progressChanged.emit(20, msg),
             )
             last_barometric = stabilized.barometric_psia
             self._port.alicat.hold_valve()
@@ -104,6 +105,11 @@ class LeakCheckRunner(QObject):
                     alicat_samples.append((elapsed, alicat_value))
                 if transducer_value is not None:
                     transducer_samples.append((elapsed, transducer_value))
+                self.sampleData.emit(
+                    elapsed,
+                    alicat_value if alicat_value is not None else 0.0,
+                    transducer_value if transducer_value is not None else 0.0,
+                )
 
                 percent = 25 + int((elapsed / max(self._settings.leak_check_duration_s, 1.0)) * 70)
                 remaining = max(0.0, self._settings.leak_check_duration_s - elapsed)

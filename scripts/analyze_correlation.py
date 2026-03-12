@@ -465,20 +465,12 @@ def infer_port_from_path(csv_path: Path) -> str:
     return stem[:20] if len(stem) > 20 else stem
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Analyze comprehensive correlation CSV(s); supports multiple files for both ports.'
-    )
-    parser.add_argument(
-        'csv_files',
-        type=Path,
-        nargs='+',
-        help='One or more comprehensive_correlation_*.csv files',
-    )
-    parser.add_argument('--no-plots', action='store_true', help='Skip generating plots')
-    args = parser.parse_args()
-
-    for p in args.csv_files:
+def run_analyze(
+    csv_paths: List[Path],
+    no_plots: bool = False,
+) -> int:
+    """Analyze one or more correlation CSVs; print recommendations and optionally plot. Returns 0 on success, 1 on error."""
+    for p in csv_paths:
         if not p.exists():
             print(f"File not found: {p}")
             return 1
@@ -486,7 +478,7 @@ def main():
     per_file_baro: List[tuple[str, Dict]] = []
     all_recommendations: List[tuple[str, List[str]]] = []
 
-    for csv_path in args.csv_files:
+    for csv_path in csv_paths:
         port_label = infer_port_from_path(csv_path)
         print(f"\nLoading data from: {csv_path} (port: {port_label})")
         readings = load_data(csv_path)
@@ -510,7 +502,7 @@ def main():
             f.write("\n".join(recs))
         print(f"Recommendations saved to: {rec_file}")
 
-        if not args.no_plots:
+        if not no_plots:
             plot_results(readings, str(csv_path))
 
     report_barometric_summary(per_file_baro)
@@ -525,6 +517,22 @@ def main():
     print("="*70)
 
     return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Analyze comprehensive correlation CSV(s); supports multiple files for both ports.'
+    )
+    parser.add_argument(
+        'csv_files',
+        type=Path,
+        nargs='+',
+        help='One or more comprehensive_correlation_*.csv files',
+    )
+    parser.add_argument('--no-plots', action='store_true', help='Skip generating plots')
+    args = parser.parse_args()
+
+    return run_analyze(csv_paths=args.csv_files, no_plots=args.no_plots)
 
 
 if __name__ == '__main__':
