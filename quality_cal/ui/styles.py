@@ -109,6 +109,125 @@ QCheckBox::indicator {{
     width: 20px;
     height: 20px;
 }}
+QFrame[panelRole="card"] {{
+    background: {COLORS['bg_surface_1']};
+    border: 1px solid {COLORS['border_subtle']};
+    border-radius: {RADIUS['large']};
+}}
+QFrame[panelRole="soft"] {{
+    background: {COLORS['bg_surface_2']};
+    border: 1px solid {COLORS['border_subtle']};
+    border-radius: {RADIUS['medium']};
+}}
+QLabel[textRole="hero"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['headline']}
+    font-weight: 700;
+}}
+QLabel[textRole="sectionTitle"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['title']}
+    font-weight: 700;
+}}
+QLabel[textRole="subsectionTitle"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['subtitle']}
+    font-weight: 700;
+}}
+QLabel[textRole="statusTitle"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['subtitle']}
+    font-weight: 700;
+}}
+QLabel[textRole="body"] {{
+    color: {COLORS['text_secondary']};
+    {TYPOGRAPHY['body']}
+}}
+QLabel[textRole="muted"] {{
+    color: {COLORS['muted']};
+    {TYPOGRAPHY['caption']}
+}}
+QLabel[textRole="stageTitle"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['body']}
+    font-weight: 700;
+}}
+QLabel[textRole="stageDescription"] {{
+    color: {COLORS['muted']};
+    {TYPOGRAPHY['caption']}
+}}
+QLabel[textRole="metric"] {{
+    color: {COLORS['text_primary']};
+    {TYPOGRAPHY['body']}
+    font-weight: 600;
+}}
+QLabel[chipState="success"] {{
+    background: {COLORS['success_muted']};
+    color: {COLORS['success']};
+    border: 1px solid {COLORS['success']};
+    border-radius: {RADIUS['pill']};
+    padding: 6px 10px;
+    font-weight: 700;
+}}
+QLabel[chipState="danger"] {{
+    background: {COLORS['danger_muted']};
+    color: {COLORS['danger']};
+    border: 1px solid {COLORS['danger']};
+    border-radius: {RADIUS['pill']};
+    padding: 6px 10px;
+    font-weight: 700;
+}}
+QFrame[hardwareState="ok"] {{
+    border-left: 4px solid {COLORS['success']};
+}}
+QFrame[hardwareState="error"] {{
+    border-left: 4px solid {COLORS['danger']};
+}}
+QFrame[stageState="current"] {{
+    border: 1px solid {COLORS['accent_blue']};
+    background: {COLORS['accent_blue_muted']};
+}}
+QFrame[stageState="complete"] {{
+    border: 1px solid {COLORS['success']};
+    background: {COLORS['success_muted']};
+}}
+QFrame[stageState="pending"] {{
+    border: 1px solid {COLORS['border_subtle']};
+}}
+QLabel[badgeState="current"] {{
+    background: {COLORS['accent_blue']};
+    color: {COLORS['white']};
+    border-radius: 14px;
+    font-weight: 700;
+}}
+QLabel[badgeState="complete"] {{
+    background: {COLORS['success']};
+    color: {COLORS['white']};
+    border-radius: 14px;
+    font-weight: 700;
+}}
+QLabel[badgeState="pending"] {{
+    background: {COLORS['bg_surface_2']};
+    color: {COLORS['muted']};
+    border-radius: 14px;
+    border: 1px solid {COLORS['border_muted']};
+    font-weight: 700;
+}}
+QFrame[bannerState="success"] {{
+    background: {COLORS['success_muted']};
+    border: 1px solid {COLORS['success']};
+    border-radius: {RADIUS['large']};
+}}
+QFrame[bannerState="danger"] {{
+    background: {COLORS['danger_muted']};
+    border: 1px solid {COLORS['danger']};
+    border-radius: {RADIUS['large']};
+}}
+QFrame[bannerState="neutral"] {{
+    background: {COLORS['bg_surface_2']};
+    border: 1px solid {COLORS['border_muted']};
+    border-radius: {RADIUS['large']};
+}}
 {STYLES['progress_bar']}
 """
 

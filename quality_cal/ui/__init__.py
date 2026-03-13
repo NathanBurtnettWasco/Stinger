@@ -1,5 +1,5 @@
 """UI package for the standalone quality calibration app."""
 
-from .wizard import QualityCalibrationWizard
+from .window import QualityCalibrationWindow
 
-__all__ = ["QualityCalibrationWizard"]
+__all__ = ['QualityCalibrationWindow']

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from quality_cal.config import load_config, parse_quality_settings, setup_logging
 from quality_cal.ui.styles import APP_STYLESHEET
-from quality_cal.ui import QualityCalibrationWizard
+from quality_cal.ui import QualityCalibrationWindow
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ def main() -> int:
         app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
 
     try:
-        wizard = QualityCalibrationWizard(config=config, settings=settings)
-        wizard.showMaximized()
+        window = QualityCalibrationWindow(config=config, settings=settings)
+        window.showMaximized()
         return app.exec()
     except Exception as exc:
         logger.exception("Fatal startup error")
