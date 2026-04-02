@@ -430,7 +430,13 @@ class PortManager:
         return success
     
     def connect_all(self) -> bool:
-        """Connect to hardware for all ports."""
+        """Connect to hardware for all ports.
+
+        When an Alicat connection fails on its configured COM port, auto-
+        discovery is attempted: available serial ports are probed for a
+        responding Alicat at the expected address.  If found, the port's
+        Alicat controller is updated and the connection retried.
+        """
         import time
 
         success = True
@@ -438,8 +444,26 @@ class PortManager:
         for port_id, port in self.ports.items():
             port_start = time.perf_counter()
             if not port.connect():
-                logger.error(f"PortManager: Failed to connect {port_id.value}")
-                success = False
+                alicat = getattr(port, 'alicat', None)
+                if alicat is None or not alicat.hardware_available() or alicat._is_connected:
+                    logger.error(f"PortManager: Failed to connect {port_id.value}")
+                    success = False
+                else:
+                    discovered = self._discover_alicat_port(port)
+                    if discovered and discovered != alicat.com_port:
+                        logger.info(
+                            'PortManager: Auto-discovered %s Alicat on %s (was %s)',
+                            port_id.value,
+                            discovered,
+                            alicat.com_port,
+                        )
+                        alicat.com_port = discovered
+                        if not alicat.connect():
+                            logger.error(f"PortManager: Failed to connect {port_id.value}")
+                            success = False
+                    else:
+                        logger.error(f"PortManager: Failed to connect {port_id.value}")
+                        success = False
             logger.info(
                 "PortManager: %s connect completed in %.3fs",
                 port_id.value,
@@ -453,6 +477,46 @@ class PortManager:
         )
         
         return success
+
+    def _discover_alicat_port(self, port: Port) -> Optional[str]:
+        """Scan available serial ports for a responding Alicat at the expected address."""
+        available = AlicatController.list_available_ports()
+        available_ports = [p['device'] for p in available]
+        if not available_ports:
+            return None
+
+        alicat = port.alicat
+        for candidate in available_ports:
+            if candidate == alicat.com_port:
+                continue
+            probe_cfg = {
+                **alicat.config,
+                'com_port': candidate,
+                'auto_configure': False,
+                'auto_tare_on_connect': False,
+                'command_retries': 0,
+                'response_read_attempts': 2,
+            }
+            probe = AlicatController(probe_cfg)
+            try:
+                if not probe.connect(max_retries=1):
+                    continue
+                reading = probe.read_status()
+                if reading is not None:
+                    return candidate
+            except Exception as exc:
+                logger.debug(
+                    'Alicat discovery probe failed on %s address=%s: %s',
+                    candidate,
+                    alicat.address,
+                    exc,
+                )
+            finally:
+                try:
+                    probe.disconnect()
+                except Exception:
+                    pass
+        return None
     
     def get_port(self, port_id: PortId | str) -> Optional[Port]:
         """Get a specific port by ID."""

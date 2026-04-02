@@ -116,6 +116,7 @@ class UIBridge(QObject):
         self._in_progress_serials: Set[int] = set()
         self._serial_lock = threading.Lock()
         self._pressure_unit = "PSIA"
+        self._display_reference: Optional[str] = None
         self._last_pressure_abs_psi: Dict[str, float] = {
             "port_a": 0.0,
             "port_b": 0.0,
@@ -153,7 +154,10 @@ class UIBridge(QObject):
         unit_label: str,
         barometric_psi: float,
     ) -> Optional[float]:
-        return to_display_pressure(value_abs_psi, unit_label, barometric_psi)
+        return to_display_pressure(
+            value_abs_psi, unit_label, barometric_psi,
+            pressure_reference=self._display_reference,
+        )
 
     def _to_absolute_pressure(self, value_psi: float, source_reference: Optional[str], barometric_psi: float) -> float:
         return to_absolute_pressure(value_psi, source_reference, barometric_psi)
@@ -317,6 +321,14 @@ class UIBridge(QObject):
     def get_pressure_unit(self) -> str:
         """Get the current display units for pressure readouts."""
         return self._pressure_unit
+
+    def set_display_reference(self, reference: Optional[str]) -> None:
+        """Set the pressure reference frame for display conversions."""
+        self._display_reference = reference
+
+    def get_display_reference(self) -> Optional[str]:
+        """Get the current pressure reference frame for display conversions."""
+        return self._display_reference
 
     def set_switch_state(self, port_id: str, no_active: bool, nc_active: bool) -> None:
         """Directly set switch state for a port."""

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 VALIDATION_DEBOUNCE_MS = 300
 SHOP_ORDER_MIN_VALIDATE_LEN = 4
+SHOP_ORDER_AUTO_ADVANCE_LEN = 8
 
 
 class LoginDialog(QDialog):
@@ -323,8 +324,19 @@ class LoginDialog(QDialog):
 
     @pyqtSlot()
     def _schedule_validation(self) -> None:
-        """Schedule validation to run shortly after user stops typing."""
+        """Schedule validation to run shortly after user stops typing.
+
+        If the work order reaches exactly SHOP_ORDER_AUTO_ADVANCE_LEN
+        characters, trigger validation immediately and advance focus to
+        the Part ID field (replaces the old timeout-based jump).
+        """
         if self._test_mode_enabled:
+            return
+        text = self.shop_order_input.text().strip()
+        if len(text) == SHOP_ORDER_AUTO_ADVANCE_LEN:
+            self.validation_timer.stop()
+            self._validate_shop_order()
+            self.part_id_input.setFocus()
             return
         self.validation_timer.stop()
         self.validation_timer.start(VALIDATION_DEBOUNCE_MS)

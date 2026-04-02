@@ -1,12 +1,12 @@
 param(
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath,
     [switch]$InstallPyInstaller,
     [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
 
-$projectPath = (Resolve-Path $ProjectRoot).Path
+$projectPath = (Resolve-Path $ProjectRoot).ProviderPath
 $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 $specPath = Join-Path $projectPath 'Stinger.spec'
 $distRoot = Join-Path $projectPath 'dist'
@@ -75,6 +75,17 @@ New-Item -ItemType Directory -Path $publishPath -Force | Out-Null
 & robocopy $distPath $publishPath /MIR /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 # Robocopy exit: 0=nothing, 1=copied, 2=extra, 3=copied+extra, 4=mismatch. 8+=error
 if ($LASTEXITCODE -ge 8) { throw "Robocopy failed with exit $LASTEXITCODE" }
+
+# Copy to CalibrationUser desktop
+$desktopPath = 'C:\Users\CalibrationUser\Desktop\Stinger'
+if (Test-Path (Split-Path $desktopPath -Parent)) {
+    New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
+    & robocopy $distPath $desktopPath /MIR /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "Robocopy to desktop failed with exit $LASTEXITCODE" }
+    Write-Host "Deployed to desktop: $desktopPath"
+} else {
+    Write-Warning "CalibrationUser profile not found - skipping desktop deploy"
+}
 
 Write-Host "Build complete: $exePath"
 Write-Host "Manifest: $manifestPath"

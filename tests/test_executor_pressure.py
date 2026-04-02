@@ -269,7 +269,10 @@ def test_executor_precision_targets_use_close_limit_for_increasing() -> None:
     assert target_back == pytest.approx(22.0, rel=1e-6)
 
 
-def test_executor_precision_targets_reject_bad_cycle_estimates_and_fallback() -> None:
+def test_executor_precision_targets_auto_reorder_swapped_cycle_estimates() -> None:
+    """When cycle estimates are in the wrong order for the activation direction,
+    _ordered_cycle_estimates swaps them so that valid precision targets are
+    derived from cycle data rather than falling back to PTP close-limit."""
     setup = TestSetup(
         part_id='17025',
         sequence_id='399',
@@ -294,7 +297,8 @@ def test_executor_precision_targets_reject_bad_cycle_estimates_and_fallback() ->
         get_latest_reading=lambda _pid: None,
         get_barometric_psi=lambda _pid: 14.7,
     )
-    # Invalid for increasing direction: activation should be above deactivation.
+    # Raw labels are swapped for increasing direction (activation below deactivation),
+    # but _ordered_cycle_estimates auto-corrects this.
     executor._cycle_activation_samples = [23.0]
     executor._cycle_deactivation_samples = [24.5]
     approach, target_out, target_back, source = executor._resolve_precision_targets(
@@ -302,10 +306,15 @@ def test_executor_precision_targets_reject_bad_cycle_estimates_and_fallback() ->
         max_psi=26.0,
         activation_direction=1,
     )
-    assert source == 'ptp-close-limit'
-    assert approach == pytest.approx(22.0, rel=1e-6)
-    assert target_out == pytest.approx(26.0, rel=1e-6)
-    assert target_back == pytest.approx(22.0, rel=1e-6)
+    assert source == 'cycle-estimate-offset-close-limit'
+    # After reorder: activation_est=24.5 (higher), deactivation_est=23.0 (lower)
+    offset = 40.0 * (14.7 / 760.0)  # precision_close_limit_offset_torr in PSI
+    margin = 15.0 * (14.7 / 760.0)  # precision_deactivation_margin_torr in PSI
+    assert approach == pytest.approx(max(22.0, 24.5 - offset), rel=1e-3)
+    # target_out is widened to cover the activation band upper limit (26.0)
+    # plus a 25% offset buffer to guarantee the sweep passes through
+    assert target_out == pytest.approx(26.0 + offset * 0.25, rel=1e-3)
+    assert target_back == pytest.approx(max(22.0, 23.0 - margin), rel=1e-3)
 
 
 def test_executor_run_precision_does_not_skip_atmosphere_gate() -> None:

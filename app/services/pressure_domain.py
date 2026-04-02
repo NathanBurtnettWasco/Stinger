@@ -57,13 +57,23 @@ def to_display_pressure(
     value_abs_psi: Optional[float],
     unit_label: Optional[str],
     barometric_psi: float,
+    pressure_reference: Optional[str] = None,
 ) -> Optional[float]:
-    """Convert absolute PSI to requested display units."""
+    """Convert absolute PSI to requested display units.
+
+    When *pressure_reference* is ``'gauge'`` and the unit label is not already
+    a PSI gauge variant, the result is converted to gauge in the target unit
+    (i.e. barometric pressure in the target unit is subtracted).
+    """
     if value_abs_psi is None:
         return None
     if is_gauge_unit_label(unit_label):
         return float(value_abs_psi - barometric_psi)
-    return float(convert_pressure(value_abs_psi, 'PSI', unit_label or 'PSI'))
+    converted = float(convert_pressure(value_abs_psi, 'PSI', unit_label or 'PSI'))
+    if str(pressure_reference or '').strip().lower() == 'gauge':
+        baro_in_display_units = float(convert_pressure(barometric_psi, 'PSI', unit_label or 'PSI'))
+        return converted - baro_in_display_units
+    return converted
 
 
 def resolve_display_reference(unit_label: Optional[str], default_reference: Optional[str]) -> str:

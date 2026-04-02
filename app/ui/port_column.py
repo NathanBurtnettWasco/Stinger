@@ -549,9 +549,10 @@ class PortColumn(QFrame):
         if unit_text:
             self._pressure_bar.set_units_label(unit_text)
 
-        activation_band = viz_data.get('activation_band')
-        deactivation_band = viz_data.get('deactivation_band')
-        self._pressure_bar.set_bands(activation_band, deactivation_band)
+        if 'activation_band' in viz_data or 'deactivation_band' in viz_data:
+            activation_band = viz_data.get('activation_band')
+            deactivation_band = viz_data.get('deactivation_band')
+            self._pressure_bar.set_bands(activation_band, deactivation_band)
 
         atmosphere_psi = viz_data.get('atmosphere_psi')
         if atmosphere_psi is not None:

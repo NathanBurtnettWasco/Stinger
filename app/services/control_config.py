@@ -111,7 +111,7 @@ def parse_control_config(config: dict[str, Any]) -> ControlConfig:
             precision_prepass_nudge_torr=float(edge.get('precision_prepass_nudge_torr', 20.0)),
             precision_deactivation_margin_torr=float(edge.get('precision_deactivation_margin_torr', 15.0)),
             precision_post_target_grace_sec=float(edge.get('precision_post_target_grace_sec', 0.35)),
-            precision_return_overshoot_torr=float(edge.get('precision_return_overshoot_torr', 12.0)),
+            precision_return_overshoot_torr=float(edge.get('precision_return_overshoot_torr', 30.0)),
         ),
         debounce=DebounceConfig(
             stable_sample_count=int(debounce.get('stable_sample_count', 3)),

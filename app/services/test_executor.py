@@ -50,11 +50,12 @@ class CyclePhaseRunner:
         if self._ctx._cancel_event.is_set():
             return
         min_psi, max_psi = bounds
-        # For pressure (increasing) switches, we need to ramp UP past the
-        # deactivation region before cycling — approach the near (lower) end.
-        # For vacuum (decreasing) switches, we need to pull DOWN past the
-        # deactivation region — approach the near (upper) end.
-        if sweep_mode == 'pressure':
+        activation_direction = self._ctx._resolve_activation_sweep_direction()
+        # Position on the deactivation side of the range so the first cycle
+        # can immediately ramp toward activation:
+        #   Increasing activation → deactivation is at the lower end
+        #   Decreasing activation → deactivation is at the upper end
+        if activation_direction > 0:
             pre_approach_target = min_psi
         else:
             pre_approach_target = max_psi
@@ -102,7 +103,7 @@ class CyclePhaseRunner:
     def run_single_cycle(self, sweep_mode: str, bounds: tuple[float, float]) -> None:
         """Run a single cycle: ramp fast until activation detected, then reverse until deactivation detected."""
         min_psi, max_psi = bounds
-        direction = 1 if sweep_mode == 'pressure' else -1
+        direction = self._ctx._resolve_activation_sweep_direction()
         hw_min_psi, hw_max_psi = self._ctx._resolve_hardware_limits_test_reference()
 
         range_span = max_psi - min_psi
@@ -156,10 +157,11 @@ class CyclePhaseRunner:
             timeout_s=self._ctx._edge_timeout_s,
         )
 
+        if self._ctx._cancel_event.is_set():
+            return
+
         if not activation_detected:
-            # Check if this is a "no switch detected" case
             if activation_diagnostic == 'NO_SWITCH_DETECTED':
-                # Vent immediately when no switch is detected - don't wait for error handling
                 logger.warning(
                     '%s: No switch detected - venting to atmosphere immediately',
                     self._ctx._port_id,
@@ -177,9 +179,6 @@ class CyclePhaseRunner:
                     TestFailureCode.EDGE_NOT_FOUND,
                     error_msg,
                 )
-
-        if self._ctx._cancel_event.is_set():
-            return
 
         # ---- Phase 2: Immediately reverse direction and ramp toward deactivation until deactivation edge detected ----
         target_deactivation_abs = self._ctx._to_absolute(target_deactivation)
@@ -203,10 +202,11 @@ class CyclePhaseRunner:
             timeout_s=self._ctx._edge_timeout_s,
         )
 
+        if self._ctx._cancel_event.is_set():
+            return
+
         if not deactivation_detected:
-            # Check if this is a "no switch detected" case
             if deactivation_diagnostic == 'NO_SWITCH_DETECTED':
-                # Vent immediately when no switch is detected - don't wait for error handling
                 logger.warning(
                     '%s: No switch detected - venting to atmosphere immediately',
                     self._ctx._port_id,
@@ -1288,38 +1288,49 @@ class TestExecutor:
         - Slow sweep from that close limit to the activation-side boundary.
         - Reverse back to the close limit to capture the return edge.
         """
-        activation_estimate = (
-            self._mean_or_none(self._cycle_activation_samples)
-        )
-        deactivation_estimate = (
-            self._mean_or_none(self._cycle_deactivation_samples)
-        )
+        activation_estimate, deactivation_estimate = self._ordered_cycle_estimates()
 
         if activation_estimate is not None and deactivation_estimate is not None:
             offset = self._precision_close_limit_offset_psi
             margin = self._precision_deactivation_margin_psi
             # Get hardware limits as absolute bounds (allow going slightly outside PTP bounds if needed)
             hw_min, hw_max = self._resolve_hardware_limits_test_reference()
+
+            # Resolve the PTP activation band so the sweep is guaranteed to
+            # cover the full acceptance window even when the cycle estimate
+            # is biased away from the real activation point.
+            act_band = self._resolve_activation_band_psi(activation_direction, min_psi, max_psi)
+
             if activation_direction < 0:
                 # Decreasing activation: activation at lower pressure,
                 # deactivation at higher pressure.
                 # Approach from above, just above the activation point.
                 approach_target = min(max_psi, activation_estimate + offset)
                 # Slow sweep down past activation to find the activation edge.
-                # Allow going below min_psi if needed to detect activation, but respect hardware limits
                 target_out = max(hw_min, activation_estimate - offset)
+                # Widen to cover the activation band if the estimate is off
+                if act_band:
+                    approach_target = max(approach_target, act_band[1] + offset * 0.25)
+                    target_out = min(target_out, act_band[0] - offset * 0.25)
+                    approach_target = min(hw_max, approach_target)
+                    target_out = max(hw_min, target_out)
                 # Reverse sweep up past deactivation to find the deactivation edge.
-                target_back = min(max_psi, deactivation_estimate + margin)
+                target_back = min(hw_max, deactivation_estimate + margin)
             else:
                 # Increasing activation: activation at higher pressure,
                 # deactivation at lower pressure.
                 # Approach from below, just below the activation point.
                 approach_target = max(min_psi, activation_estimate - offset)
                 # Slow sweep up past activation to find the activation edge.
-                # Allow going above max_psi if needed to detect activation, but respect hardware limits
                 target_out = min(hw_max, activation_estimate + offset)
+                # Widen to cover the activation band if the estimate is off
+                if act_band:
+                    approach_target = min(approach_target, act_band[0] - offset * 0.25)
+                    target_out = max(target_out, act_band[1] + offset * 0.25)
+                    approach_target = max(hw_min, approach_target)
+                    target_out = min(hw_max, target_out)
                 # Reverse sweep down past deactivation to find the deactivation edge.
-                target_back = max(min_psi, deactivation_estimate - margin)
+                target_back = max(hw_min, deactivation_estimate - margin)
             validation_error = self._validate_cycle_estimate_targets(
                 activation_direction=activation_direction,
                 approach_target=approach_target,
@@ -1329,11 +1340,18 @@ class TestExecutor:
                 deactivation_estimate=deactivation_estimate,
             )
             if validation_error is None:
-                out_of_bounds_note = ''
-                if activation_direction < 0 and target_out < min_psi:
-                    out_of_bounds_note = f' (target_out below PTP min={min_psi:.4f})'
-                elif activation_direction > 0 and target_out > max_psi:
-                    out_of_bounds_note = f' (target_out above PTP max={max_psi:.4f})'
+                oob_parts: list[str] = []
+                if activation_direction < 0:
+                    if target_out < min_psi:
+                        oob_parts.append(f'target_out below PTP min={min_psi:.4f}')
+                    if target_back > max_psi:
+                        oob_parts.append(f'target_back above PTP max={max_psi:.4f}')
+                else:
+                    if target_out > max_psi:
+                        oob_parts.append(f'target_out above PTP max={max_psi:.4f}')
+                    if target_back < min_psi:
+                        oob_parts.append(f'target_back below PTP min={min_psi:.4f}')
+                out_of_bounds_note = f' ({"; ".join(oob_parts)})' if oob_parts else ''
                 logger.info(
                     '%s: Precision targets from cycle estimates: approach=%.4f out=%.4f back=%.4f '
                     '(act_est=%.4f deact_est=%.4f offset=%.4f margin=%.4f)%s',
@@ -1488,6 +1506,20 @@ class TestExecutor:
             return None
         return (low, high)
 
+    def _resolve_activation_band_psi(
+        self,
+        activation_direction: int,
+        min_psi: float,
+        max_psi: float,
+    ) -> Optional[tuple[float, float]]:
+        """Return the PTP activation acceptance band in PSI, if available."""
+        if not self._test_setup:
+            return None
+        band_key = 'decreasing' if activation_direction < 0 else 'increasing'
+        return self._band_limits_to_psi(
+            self._test_setup.bands.get(band_key), min_psi, max_psi,
+        )
+
     def _resolve_sweep_mode(self) -> str:
         """Determine whether to sweep in pressure or vacuum direction."""
         return resolve_sweep_mode(
@@ -1555,8 +1587,7 @@ class TestExecutor:
         else:
             self._cycle_deactivation_samples.append(sample_pressure)
 
-        activation = self._mean_or_none(self._cycle_activation_samples)
-        deactivation = self._mean_or_none(self._cycle_deactivation_samples)
+        activation, deactivation = self._ordered_cycle_estimates()
         count = max(len(self._cycle_activation_samples), len(self._cycle_deactivation_samples))
         logger.debug(
             '%s: Cycle estimate act=%s deact=%s samples=%d',
@@ -1567,6 +1598,35 @@ class TestExecutor:
         )
         if self._on_cycle_estimate:
             self._on_cycle_estimate(activation, deactivation, count)
+
+    def _ordered_cycle_estimates(self) -> tuple[Optional[float], Optional[float]]:
+        """Return cycle estimates ordered consistently with the activation direction.
+
+        For increasing activation, activation should be above deactivation.
+        For decreasing activation, activation should be below deactivation.
+        If the raw switch-state labels produced the opposite ordering, swap
+        them so downstream consumers (display and precision targets) see
+        the correct semantics.
+        """
+        activation = self._mean_or_none(self._cycle_activation_samples)
+        deactivation = self._mean_or_none(self._cycle_deactivation_samples)
+        if activation is not None and deactivation is not None:
+            direction = self._resolve_activation_sweep_direction()
+            needs_swap = (
+                (direction > 0 and activation < deactivation)
+                or (direction < 0 and activation > deactivation)
+            )
+            if needs_swap:
+                logger.debug(
+                    '%s: Reordering cycle estimates for %s direction: '
+                    'raw act=%.4f deact=%.4f -> swapped',
+                    self._port_id,
+                    'increasing' if direction > 0 else 'decreasing',
+                    activation,
+                    deactivation,
+                )
+                activation, deactivation = deactivation, activation
+        return activation, deactivation
 
     @staticmethod
     def _mean_or_none(values: list[float]) -> Optional[float]:

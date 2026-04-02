@@ -280,6 +280,10 @@ class PressureBarWidget(QWidget):
             units_y = font_metrics.ascent()
         text_x = rect.right() + 12 if self._axis_side == 'right' else rect.left() - 12 - font_metrics.horizontalAdvance(self._units_label)
         painter.drawText(text_x, units_y, self._units_label)
+
+        # Collect band limit values so we can draw labeled ticks for them
+        # and suppress overlapping major-tick labels.
+        band_limits = self._collect_band_limits()
         
         # Major ticks
         major_ticks = 10
@@ -297,6 +301,10 @@ class PressureBarWidget(QWidget):
             else:
                 painter.drawLine(rect.left(), y, rect.left() - 8, y)
             
+            # Skip label if a band-limit label is nearby (avoid overlap)
+            if self._near_any_band_limit(psi, band_limits):
+                continue
+
             # Label (right-aligned) - darker for better contrast
             painter.setPen(QPen(QColor(55, 65, 81), 1))
             text = f"{psi:.1f}" if (self._max_psi - self._min_psi) < 10 else f"{psi:.0f}"
@@ -320,6 +328,70 @@ class PressureBarWidget(QWidget):
                 painter.drawLine(rect.right(), y, rect.right() + 4, y)
             else:
                 painter.drawLine(rect.left(), y, rect.left() - 4, y)
+
+        # Band-limit ticks: prominent labeled ticks at each band boundary
+        if band_limits and self._show_acceptance_bands:
+            self._draw_band_limit_ticks(painter, rect, band_limits)
+
+    def _collect_band_limits(self) -> list[float]:
+        """Return deduplicated, sorted band boundary values within the visible scale."""
+        seen: set[float] = set()
+        for band in (self._activation_band, self._deactivation_band):
+            if not band:
+                continue
+            for v in band:
+                if self._min_psi <= v <= self._max_psi:
+                    seen.add(round(v, 4))
+        return sorted(seen)
+
+    def _near_any_band_limit(self, psi: float, band_limits: list[float]) -> bool:
+        """Return True if *psi* is close enough to a band limit to cause label overlap."""
+        if not band_limits:
+            return False
+        scale_span = self._max_psi - self._min_psi
+        if scale_span <= 0:
+            return False
+        threshold = scale_span * 0.04
+        return any(abs(psi - bl) < threshold for bl in band_limits)
+
+    def _draw_band_limit_ticks(
+        self, painter: QPainter, rect, band_limits: list[float],
+    ) -> None:
+        """Draw labeled ticks at band boundary values."""
+        top = rect.top()
+        bottom = rect.bottom()
+        font = QFont("Arial", 9, QFont.Weight.Bold)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        for val in band_limits:
+            y = self._pressure_to_y(val, top, bottom)
+
+            # Tick mark
+            painter.setPen(QPen(QColor(107, 114, 128), 2))
+            if self._axis_side == 'right':
+                painter.drawLine(rect.right(), y, rect.right() + 10, y)
+            else:
+                painter.drawLine(rect.left(), y, rect.left() - 10, y)
+
+            # Label
+            scale_span = self._max_psi - self._min_psi
+            text = f"{val:.1f}" if scale_span < 10 else f"{val:.0f}"
+            tw = fm.horizontalAdvance(text)
+            th = fm.height()
+            if self._axis_side == 'right':
+                label_x = rect.right() + 12
+            else:
+                label_x = rect.left() - 12 - tw
+            label_y = y + fm.ascent() // 2
+
+            # White background for readability
+            bg_x = label_x - 2
+            bg_y = label_y - fm.ascent() - 1
+            painter.fillRect(int(bg_x), int(bg_y), tw + 4, th + 2, QColor(255, 255, 255, 220))
+
+            painter.setPen(QPen(QColor(55, 65, 81), 1))
+            painter.drawText(label_x, label_y, text)
     
     def _draw_measured_point(
         self, painter: QPainter, rect, pressure: float, color: QColor, label: str,

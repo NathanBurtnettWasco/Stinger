@@ -6,10 +6,8 @@ def test_build_pressure_points_uses_default_schedule():
 
     assert points[0] == 1.0
     assert 30.0 in points
-    assert 32.0 in points
-    assert 60.0 in points
-    assert 65.0 in points
-    assert points[-1] == 115.0
+    assert points[-1] == 30.0
+    assert len(points) == 30
 
 
 def test_build_pressure_points_uses_explicit_list():

@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
+import sqlalchemy
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -157,9 +158,6 @@ def load_test_parameters(part_id: str, sequence_id: str) -> Dict[str, str]:
         logger.error(f"Unexpected error loading PTP: {e}")
         return {}
 
-
-# Workaround for the import
-import sqlalchemy
 
 
 def insert_test_parameters(part_id: str, sequence_id: str, params: Dict[str, str]) -> bool:

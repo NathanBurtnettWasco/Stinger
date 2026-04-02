@@ -126,6 +126,8 @@ class WorkOrderController(QObject):
         self._cycle_estimates_abs_psi = self._runtime_state.cycle_estimates_abs_psi
         # Track current measured values for preserving during partial updates
         self._current_measured_values = self._runtime_state.current_measured_values
+        self._precision_zoom_active: Dict[str, bool] = {'port_a': False, 'port_b': False}
+        self._base_viz: Optional[Dict[str, Any]] = None
         self._switch_presence = self._runtime_state.switch_presence
         self._manual_switch_latched = self._runtime_state.manual_switch_latched
         for pid in ('port_a', 'port_b'):
@@ -617,6 +619,7 @@ class WorkOrderController(QObject):
             elif units_label.upper() == "PSI" and pressure_ref == "absolute":
                 units_label = "PSIA"
             self._ui_bridge.set_pressure_unit(units_label)
+            self._ui_bridge.set_display_reference(pressure_ref or None)
             display_units = self._ui_bridge.get_pressure_unit()
 
         viz = build_pressure_visualization(
@@ -625,7 +628,10 @@ class WorkOrderController(QObject):
             atmosphere_override=atmosphere_override,
             display_units_override=display_units,
         )
+        self._base_viz = viz
         for port_id in ("port_a", "port_b"):
+            if self._precision_zoom_active.get(port_id):
+                continue
             self._cycle_estimates_abs_psi[port_id] = {
                 'activation': None,
                 'deactivation': None,
@@ -922,6 +928,7 @@ class WorkOrderController(QObject):
             value_abs_psi=value_abs,
             unit_label=unit_label or 'PSI',
             barometric_psi=self._get_barometric_pressure(port_id),
+            pressure_reference=pressure_reference,
         )
         return float(converted if converted is not None else value_abs)
 
@@ -1087,6 +1094,8 @@ class WorkOrderController(QObject):
 
     def _on_sm_state_changed(self, port_id: str, state: str, data: dict) -> None:
         self._ui_bridge.update_state(port_id, state, data)
+        if state == PortState.PRECISION_TEST.value:
+            self._apply_precision_zoom(port_id)
 
     def _on_sm_substate_changed(self, port_id: str, substate: str, data: dict) -> None:
         self._ui_bridge.update_substate(port_id, substate, data)
@@ -1129,6 +1138,7 @@ class WorkOrderController(QObject):
             self._launch_test_executor(port_id)
 
     def _on_cancel(self, port_id: str) -> None:
+        self._restore_normal_viz(port_id)
         was_owner = self._precision_owner_port == port_id
         self._remove_precision_waiter(port_id)
         # Cancel any running executor first
@@ -1152,6 +1162,7 @@ class WorkOrderController(QObject):
         self._vent_port(port_id)
 
     def _on_record_success(self, port_id: str) -> None:
+        self._restore_normal_viz(port_id)
         sm = self._state_machines.get(port_id)
         if not sm:
             return
@@ -1160,6 +1171,7 @@ class WorkOrderController(QObject):
         self._advance_serial(port_id)
 
     def _on_record_failure(self, port_id: str) -> None:
+        self._restore_normal_viz(port_id)
         sm = self._state_machines.get(port_id)
         if not sm:
             return
@@ -1168,6 +1180,7 @@ class WorkOrderController(QObject):
         self._advance_serial(port_id)
 
     def _on_retest(self, port_id: str) -> None:
+        self._restore_normal_viz(port_id)
         sm = self._state_machines.get(port_id)
         if not sm:
             return
@@ -1696,6 +1709,72 @@ class WorkOrderController(QObject):
     def _slot_substate(self, port_id: str, substate: str) -> None:
         if self._ui_bridge:
             self._ui_bridge.update_substate(port_id, substate, {})
+
+    def _apply_precision_zoom(self, port_id: str) -> None:
+        """Zoom the pressure bar to the area of interest for precision testing.
+
+        Uses the stored base viz dict (already in display units) to avoid
+        reference-frame conversion issues.  Preserves bands and estimated
+        points so partial-update side-effects don't clear them.
+        """
+        if not self._base_viz or not self._ui_bridge:
+            return
+
+        display_values: list[float] = []
+
+        for band_key in ('activation_band', 'deactivation_band'):
+            band = self._base_viz.get(band_key)
+            if band:
+                for v in band:
+                    if v is not None and math.isfinite(v):
+                        display_values.append(v)
+
+        estimates = self._cycle_estimates_abs_psi.get(port_id, {})
+        setup = self._current_test_setup
+        unit_label = self._ui_bridge.get_pressure_unit()
+        pressure_reference = setup.pressure_reference if setup else None
+        for key in ('activation', 'deactivation'):
+            val = estimates.get(key)
+            if val is not None and math.isfinite(val):
+                display_val = self._to_display_pressure(
+                    port_id, val, unit_label, pressure_reference,
+                )
+                display_values.append(display_val)
+
+        if len(display_values) < 2:
+            return
+
+        raw_min = min(display_values)
+        raw_max = max(display_values)
+        span = raw_max - raw_min
+        buffer = max(span * 0.20, 1.0)
+        zoomed_min = raw_min - buffer
+        zoomed_max = raw_max + buffer
+
+        self._precision_zoom_active[port_id] = True
+        zoom_viz: Dict[str, Any] = {
+            'min_psi': zoomed_min,
+            'max_psi': zoomed_max,
+            'show_atmosphere_reference': False,
+            'activation_band': self._base_viz.get('activation_band'),
+            'deactivation_band': self._base_viz.get('deactivation_band'),
+        }
+        self._ui_bridge.update_pressure_viz(port_id, zoom_viz)
+        logger.info(
+            '%s: Precision zoom applied: %.2f–%.2f %s',
+            port_id, zoomed_min, zoomed_max, unit_label,
+        )
+
+    def _restore_normal_viz(self, port_id: str) -> None:
+        """Restore the normal (full-range) pressure bar visualization for a port."""
+        if not self._precision_zoom_active.get(port_id):
+            return
+        self._precision_zoom_active[port_id] = False
+        if not self._ui_bridge:
+            return
+        if self._base_viz:
+            self._ui_bridge.update_pressure_viz(port_id, self._base_viz)
+            logger.info('%s: Precision zoom cleared, normal viz restored', port_id)
 
     # ------------------------------------------------------------------
 
