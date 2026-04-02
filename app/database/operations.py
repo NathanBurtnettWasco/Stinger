@@ -469,6 +469,9 @@ def save_test_result(
     except SQLAlchemyError as e:
         logger.error(f"Database error saving test result: {e}")
         return False
+    except Exception as e:
+        logger.error(f"Unexpected error saving test result: {e}")
+        return False
 
 
 def get_work_order_progress(shop_order: str, part_id: str, sequence_id: str) -> Dict[str, int]:

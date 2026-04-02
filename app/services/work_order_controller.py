@@ -113,6 +113,11 @@ class WorkOrderController(QObject):
         self._status_timer.timeout.connect(self._refresh_hardware_status)
         self._status_timer.start(1000)
         self._last_db_status: Optional[str] = None
+        self._db_connection_status = 'Offline'
+        self._db_last_write = '--'
+        self._db_queue = '0'
+        self._db_activity_status: Optional[str] = None
+        self._db_activity_deadline = 0.0
         self._db_status_timer = QTimer(self)
         self._db_status_timer.timeout.connect(self._refresh_database_status)
         self._db_status_timer.start(5000)
@@ -195,6 +200,75 @@ class WorkOrderController(QObject):
         threading.Thread(target=self._initialize_hardware, daemon=True).start()
         self._refresh_database_status()
 
+    @staticmethod
+    def _normalize_progress_counts(total: Any, completed: Any, *, context: str) -> tuple[int, int]:
+        """Keep progress counts non-negative and avoid a 0-total display when rows already exist."""
+        try:
+            normalized_total = max(int(total), 0)
+        except (TypeError, ValueError):
+            normalized_total = 0
+
+        try:
+            normalized_completed = max(int(completed), 0)
+        except (TypeError, ValueError):
+            normalized_completed = 0
+
+        if normalized_total == 0 and normalized_completed > 0:
+            logger.warning(
+                '%s: Work order quantity is missing/zero while %d results already exist; '
+                'using completed count for progress display',
+                context,
+                normalized_completed,
+            )
+            normalized_total = normalized_completed
+        elif normalized_total > 0 and normalized_completed > normalized_total:
+            logger.warning(
+                '%s: Completed count %d exceeds work order quantity %d',
+                context,
+                normalized_completed,
+                normalized_total,
+            )
+
+        return normalized_completed, normalized_total
+
+    @staticmethod
+    def _timestamp_for_status() -> str:
+        return time.strftime('%H:%M:%S')
+
+    def _emit_database_status(self) -> None:
+        status = self._db_connection_status
+        if status == 'Connected' and self._db_activity_status:
+            if time.monotonic() <= self._db_activity_deadline:
+                status = self._db_activity_status
+            else:
+                self._db_activity_status = None
+
+        self._ui_bridge.update_database_status(status, self._db_last_write, self._db_queue)
+
+    def _set_database_connection_status(self, status: str) -> None:
+        if self._last_db_status != status:
+            self._last_db_status = status
+        self._db_connection_status = status
+        if status != 'Connected':
+            self._db_activity_status = None
+        self._emit_database_status()
+
+    def _set_database_activity_status(
+        self,
+        status: str,
+        *,
+        last_write: Optional[str] = None,
+        queue: Optional[str] = None,
+        hold_seconds: float = 10.0,
+    ) -> None:
+        if last_write is not None:
+            self._db_last_write = last_write
+        if queue is not None:
+            self._db_queue = queue
+        self._db_activity_status = status
+        self._db_activity_deadline = time.monotonic() + max(hold_seconds, 0.0)
+        self._emit_database_status()
+
     def _on_login_requested(self, payload: Dict[str, Any]) -> None:
         login_start = time.perf_counter()
         operator_id = str(payload.get("OperatorID", "")).strip()
@@ -253,6 +327,12 @@ class WorkOrderController(QObject):
             completed = progress.get("completed", 0)
             passed = progress.get("passed", 0)
             failed = progress.get("failed", 0)
+
+        completed, total = self._normalize_progress_counts(
+            total,
+            completed,
+            context=f'Login progress for {shop_order or "unknown work order"}',
+        )
 
         workflow_type = _workflow_for_sequence(sequence_id)
 
@@ -487,9 +567,11 @@ class WorkOrderController(QObject):
                 status, last_write, queue, exc = result
             if exc and self._last_db_status != status:
                 logger.warning("Database connectivity check failed: %s", exc)
-            if self._last_db_status != status:
-                self._last_db_status = status
-            self._ui_bridge.update_database_status(status, last_write, queue)
+            if last_write != '--':
+                self._db_last_write = last_write
+            if queue != '0':
+                self._db_queue = queue
+            self._set_database_connection_status(status)
 
         self._db_status_worker = run_async(_check, _on_done)
     
@@ -1787,12 +1869,12 @@ class WorkOrderController(QObject):
             except Exception as exc:
                 logger.error('Vent failed for %s: %s', port_id, exc)
 
-    def _save_result(self, port_id: str, force_pass: bool) -> None:
-        """Save the test result to the database."""
+    def _save_result(self, port_id: str, force_pass: bool) -> str:
+        """Save the test result to the database and surface the outcome to the UI."""
         sm = self._state_machines.get(port_id)
         wo = self._ui_bridge._current_work_order if self._ui_bridge else None
         if not sm or not wo:
-            return
+            return 'skipped'
 
         # Get measurements from state machine
         act = sm._increasing_activation
@@ -1800,7 +1882,7 @@ class WorkOrderController(QObject):
 
         if act is None or deact is None:
             logger.warning('%s: Cannot save result - missing measurements', port_id)
-            return
+            return 'skipped'
 
         # Convert to display units for storage
         unit_label = self._ui_bridge.get_pressure_unit() if self._ui_bridge else 'PSI'
@@ -1815,7 +1897,8 @@ class WorkOrderController(QObject):
                 '%s: Test mode - skipping DB write (act=%.3f, deact=%.3f %s, pass=%s)',
                 port_id, act_display, deact_display, unit_label, force_pass,
             )
-            return
+            self._set_database_activity_status('Test Mode', last_write='Skipped', queue='0')
+            return 'skipped'
 
         shop_order = wo.get('shop_order', '')
         part_id = wo.get('part_id', '')
@@ -1838,23 +1921,35 @@ class WorkOrderController(QObject):
 
         units_str = setup.units_label if setup else 'PSI'
 
-        success = save_test_result(
-            shop_order=shop_order,
-            part_id=part_id,
-            sequence_id=sequence_id,
-            serial_number=serial,
-            increasing_activation=act_display,
-            decreasing_deactivation=deact_display,
-            in_spec=force_pass,
-            temperature_c=temperature_c,
-            units_of_measure=units_str or 'PSI',
-            operator_id=operator_id,
-            equipment_id=equipment_id,
-            activation_id=activation_id,
-        )
+        try:
+            success = save_test_result(
+                shop_order=shop_order,
+                part_id=part_id,
+                sequence_id=sequence_id,
+                serial_number=serial,
+                increasing_activation=act_display,
+                decreasing_deactivation=deact_display,
+                in_spec=force_pass,
+                temperature_c=temperature_c,
+                units_of_measure=units_str or 'PSI',
+                operator_id=operator_id,
+                equipment_id=equipment_id,
+                activation_id=activation_id,
+            )
+        except Exception:
+            logger.exception('%s: Unexpected error while saving test result', port_id)
+            success = False
         if not success:
             logger.error('%s: Failed to save test result (non-modal)', port_id)
-            self._ui_bridge.update_database_status('Write Failed', '--', '1')
+            self._set_database_activity_status('Write Failed', queue='1')
+            return 'failed'
+
+        self._set_database_activity_status(
+            'Saved',
+            last_write=self._timestamp_for_status(),
+            queue='0',
+        )
+        return 'saved'
 
     def _advance_serial(self, port_id: str) -> None:
         """Advance to the next serial number after recording a result."""
@@ -1887,9 +1982,16 @@ class WorkOrderController(QObject):
             wo.get('part_id', ''),
             wo.get('sequence_id', ''),
         )
-        self._ui_bridge.update_progress(
-            progress.get('completed', 0),
+        completed, total = self._normalize_progress_counts(
             wo.get('total', 0),
+            progress.get('completed', 0),
+            context=f'Progress refresh for {wo.get("shop_order", "unknown work order")}',
+        )
+        wo['total'] = total
+        wo['completed'] = completed
+        self._ui_bridge.update_progress(
+            completed,
+            total,
             progress.get('passed', 0),
             progress.get('failed', 0),
         )

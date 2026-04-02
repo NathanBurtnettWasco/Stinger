@@ -1145,18 +1145,48 @@ class MainWindow(QMainWindow):
         total = data.get('total', 0)
         self._update_progress_display(completed, total)
 
-    def _update_progress_display(self, completed: int, total: int) -> None:
-        total = max(int(total), 0)
-        completed = max(int(completed), 0)
-        self._lbl_progress.setText(f"{completed} / {total}")
-        percent = int(round((completed / total) * 100)) if total > 0 else 0
-        self._lbl_progress_percent.setText(f"{percent}%")
-        if total > 0:
-            self._progress_bar.setRange(0, total)
-            self._progress_bar.setValue(min(completed, total))
+    @staticmethod
+    def _format_progress_display(completed: Any, total: Any) -> Tuple[str, str, int, int, str]:
+        """Format work-order progress while guarding against invalid or overflowed totals."""
+        total_value = max(_safe_int(total) or 0, 0)
+        completed_value = max(_safe_int(completed) or 0, 0)
+        progress_text = f'{completed_value} / {total_value}'
+        tooltip = ''
+
+        if total_value > 0:
+            raw_percent = (completed_value / total_value) * 100
+            percent_text = f'{min(int(round(raw_percent)), 100)}%'
+            progress_max = total_value
+            progress_value = min(completed_value, total_value)
+            if completed_value > total_value:
+                overflow = completed_value - total_value
+                progress_text = f'{completed_value} / {total_value} (+{overflow})'
+                tooltip = (
+                    f'Completed results exceed the work order quantity by {overflow}. '
+                    'Percent is capped at 100%.'
+                )
         else:
-            self._progress_bar.setRange(0, 1)
-            self._progress_bar.setValue(0)
+            percent_text = '0%'
+            progress_max = 1
+            progress_value = 0
+            if completed_value > 0:
+                tooltip = (
+                    'Completed results exist for this work order, but the order quantity is 0 or missing.'
+                )
+
+        return progress_text, percent_text, progress_max, progress_value, tooltip
+
+    def _update_progress_display(self, completed: int, total: int) -> None:
+        progress_text, percent_text, progress_max, progress_value, tooltip = (
+            self._format_progress_display(completed, total)
+        )
+        self._lbl_progress.setText(progress_text)
+        self._lbl_progress_percent.setText(percent_text)
+        self._lbl_progress.setToolTip(tooltip)
+        self._lbl_progress_percent.setToolTip(tooltip)
+        self._progress_bar.setToolTip(tooltip)
+        self._progress_bar.setRange(0, progress_max)
+        self._progress_bar.setValue(progress_value)
 
     def _on_hardware_status_updated(self, status: Dict[str, Any]) -> None:
         self._status_data["hardware"] = self._format_hardware_status(status)
