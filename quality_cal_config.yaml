@@ -9,21 +9,16 @@ hardware:
     identifier: "ANY"
     resolution_index: 9
     pressure_filter_alpha: 0.0
+    # Druck UNIK 5000 PMP50D6-* sensors are amplified 0-10 V, 4-wire units.
+    # Current hardware under test is 30 PSIA absolute.
     port_a:
       transducer_ain: 0
       transducer_ain_neg: 1
-      transducer_voltage_min: 0.5
-      transducer_voltage_max: 4.5
+      transducer_voltage_min: 0
+      transducer_voltage_max: 10
       transducer_pressure_min: 0.0
-      transducer_pressure_max: 115.0
+      transducer_pressure_max: 30
       transducer_reference: "absolute"
-      transducer_offset_psi: -0.383
-      transducer_nonlinear_correction:
-        breakpoint_psi: 5.0
-        low_slope_error_per_psi: 0.002754
-        low_intercept_error_psi: 0.009341
-        high_slope_error_per_psi: -0.001457
-        high_intercept_error_psi: 0.009642
       switch_no_dio: 2
       switch_nc_dio: 0
       switch_com_dio: 3
@@ -33,18 +28,11 @@ hardware:
     port_b:
       transducer_ain: 2
       transducer_ain_neg: 3
-      transducer_voltage_min: 0.5
-      transducer_voltage_max: 4.5
+      transducer_voltage_min: 0
+      transducer_voltage_max: 10
       transducer_pressure_min: 0.0
-      transducer_pressure_max: 115.0
+      transducer_pressure_max: 30
       transducer_reference: "absolute"
-      transducer_offset_psi: 0.09
-      transducer_nonlinear_correction:
-        breakpoint_psi: 5.0
-        low_slope_error_per_psi: -0.003546
-        low_intercept_error_psi: 0.005638
-        high_slope_error_per_psi: -0.001573
-        high_intercept_error_psi: -0.007328
       switch_no_dio: 9
       switch_nc_dio: 11
       switch_com_dio: 12
