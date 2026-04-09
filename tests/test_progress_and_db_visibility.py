@@ -150,3 +150,22 @@ def test_save_test_result_returns_false_for_unexpected_error(monkeypatch) -> Non
     )
 
     assert result is False
+
+
+def test_save_test_result_rejects_overlength_fixed_width_fields(caplog) -> None:
+    result = operations.save_test_result(
+        shop_order='SHOPORDER123',
+        part_id='PART-1',
+        sequence_id='1',
+        serial_number=1,
+        increasing_activation=12.3,
+        decreasing_deactivation=9.8,
+        in_spec=True,
+        temperature_c=25.0,
+        units_of_measure='PSI',
+        operator_id='TOO-LONG',
+        equipment_id='STINGER_01',
+    )
+
+    assert result is False
+    assert 'exceeds max length' in caplog.text

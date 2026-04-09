@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 VALIDATION_DEBOUNCE_MS = 300
 SHOP_ORDER_MIN_VALIDATE_LEN = 4
 SHOP_ORDER_AUTO_ADVANCE_LEN = 8
+SHOP_ORDER_MAX_LEN = 10
+OPERATOR_ID_MAX_LEN = 5
+PART_ID_MAX_LEN = 30
+SEQUENCE_MAX_LEN = 4
 
 
 class LoginDialog(QDialog):
@@ -595,6 +599,32 @@ class LoginDialog(QDialog):
 
         if not operator_id:
             self._show_warning_dialog("Input Missing", "Please enter an Operator ID.")
+            return
+        if len(operator_id) > OPERATOR_ID_MAX_LEN:
+            self._show_warning_dialog(
+                "Operator ID Too Long",
+                f"Operator ID must be {OPERATOR_ID_MAX_LEN} characters or fewer "
+                "to save results to SQL Server.",
+            )
+            return
+        if shop_order and len(shop_order) > SHOP_ORDER_MAX_LEN:
+            self._show_warning_dialog(
+                "Work Order Too Long",
+                f"Work Order must be {SHOP_ORDER_MAX_LEN} characters or fewer "
+                "to save results to SQL Server.",
+            )
+            return
+        if part_id and len(part_id) > PART_ID_MAX_LEN:
+            self._show_warning_dialog(
+                "Part ID Too Long",
+                f"Part ID must be {PART_ID_MAX_LEN} characters or fewer to save results.",
+            )
+            return
+        if sequence_id and len(sequence_id.strip()) > SEQUENCE_MAX_LEN:
+            self._show_warning_dialog(
+                "Sequence Too Long",
+                f"Sequence must be {SEQUENCE_MAX_LEN} characters or fewer.",
+            )
             return
         if self._test_mode_enabled:
             # In test mode, use defaults if Part ID/Sequence not provided

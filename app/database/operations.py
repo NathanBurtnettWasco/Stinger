@@ -21,6 +21,35 @@ from .session import session_scope
 
 logger = logging.getLogger(__name__)
 
+ORDER_CAL_DETAIL_LIMITS: Dict[str, int] = {
+    'shop_order': 10,
+    'sequence_id': 4,
+    'part_id': 30,
+    'operator_id': 5,
+    'equipment_id': 20,
+    'units_of_measure': 20,
+}
+
+
+def _clean_string(value: Any) -> str:
+    """Normalize string-ish database inputs before validation."""
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _validate_fixed_width(value: str, *, field_name: str, max_length: int) -> bool:
+    """Reject values that exceed live SQL Server fixed-width column limits."""
+    if len(value) <= max_length:
+        return True
+    logger.error(
+        'Database write rejected: %s=%r exceeds max length %d',
+        field_name,
+        value,
+        max_length,
+    )
+    return False
+
 
 def validate_shop_order(shop_order: str) -> Optional[Dict[str, Any]]:
     """
@@ -415,15 +444,56 @@ def save_test_result(
     """
     action = 'Saved'
     try:
+        shop_order_clean = _clean_string(shop_order)
+        part_id_clean = _clean_string(part_id)
+        operator_id_clean = _clean_string(operator_id)
+        equipment_id_clean = _clean_string(equipment_id)
+        units_clean = _clean_string(units_of_measure) or 'PSI'
+        seq_formatted = f"{int(str(sequence_id).strip()):04d}"
+
+        if not _validate_fixed_width(
+            shop_order_clean,
+            field_name='shop_order',
+            max_length=ORDER_CAL_DETAIL_LIMITS['shop_order'],
+        ):
+            return False
+        if not _validate_fixed_width(
+            seq_formatted,
+            field_name='sequence_id',
+            max_length=ORDER_CAL_DETAIL_LIMITS['sequence_id'],
+        ):
+            return False
+        if not _validate_fixed_width(
+            part_id_clean,
+            field_name='part_id',
+            max_length=ORDER_CAL_DETAIL_LIMITS['part_id'],
+        ):
+            return False
+        if not _validate_fixed_width(
+            operator_id_clean,
+            field_name='operator_id',
+            max_length=ORDER_CAL_DETAIL_LIMITS['operator_id'],
+        ):
+            return False
+        if not _validate_fixed_width(
+            equipment_id_clean,
+            field_name='equipment_id',
+            max_length=ORDER_CAL_DETAIL_LIMITS['equipment_id'],
+        ):
+            return False
+        if not _validate_fixed_width(
+            units_clean,
+            field_name='units_of_measure',
+            max_length=ORDER_CAL_DETAIL_LIMITS['units_of_measure'],
+        ):
+            return False
+
         with session_scope() as session:
-            # Format sequence ID with zero-padding
-            seq_formatted = f"{int(sequence_id.strip()):04d}"
-            
             # Check if record exists
             existing = session.query(OrderCalibrationDetail).filter_by(
-                ShopOrder=shop_order.strip(),
+                ShopOrder=shop_order_clean,
                 SequenceID=seq_formatted,
-                PartID=part_id.strip(),
+                PartID=part_id_clean,
                 SerialNumber=serial_number,
                 ActivationID=activation_id
             ).one_or_none()
@@ -436,17 +506,17 @@ def save_test_result(
                 existing.IncreasingGap = 0
                 existing.DecreasingGap = 0
                 existing.InSpec = in_spec
-                existing.UnitsOfMeasure = units_of_measure
+                existing.UnitsOfMeasure = units_clean
                 existing.InspectionDate = datetime.now()
-                existing.OperatorID = operator_id
-                existing.EquipmentID = equipment_id
+                existing.OperatorID = operator_id_clean
+                existing.EquipmentID = equipment_id_clean
                 action = 'Updated'
             else:
                 # Insert new record
                 record = OrderCalibrationDetail(
-                    ShopOrder=shop_order.strip(),
+                    ShopOrder=shop_order_clean,
                     SequenceID=seq_formatted,
-                    PartID=part_id.strip(),
+                    PartID=part_id_clean,
                     SerialNumber=serial_number,
                     ActivationID=activation_id,
                     IncreasingActivation=increasing_activation,
@@ -455,10 +525,10 @@ def save_test_result(
                     IncreasingGap=0,
                     DecreasingGap=0,
                     InSpec=in_spec,
-                    UnitsOfMeasure=units_of_measure,
+                    UnitsOfMeasure=units_clean,
                     InspectionDate=datetime.now(),
-                    OperatorID=operator_id,
-                    EquipmentID=equipment_id
+                    OperatorID=operator_id_clean,
+                    EquipmentID=equipment_id_clean
                 )
                 session.add(record)
                 action = 'Inserted'
